@@ -278,6 +278,13 @@ strata generate: pre-filled 12045 of 12045 slots from the profile
 配置：删 `STRATA_ARENA_MMAP` 与 `--pcie-frac 0`（恢复 auto→0.55）。回滚：`strata-iq3_s.json.pre-p4` + `engine/strata.pre-p4`。
 预期与验收（重启后对照 §9）：`expert arena: PCIe alias registered over ~35.6 GiB in ~4.5k runs`；全量 prefill 回 ~5.5–6k tok/s；RSS ≈ pinned 35.6 + 引擎开销；MemAvailable ~15 GiB（推算）；fixed evict attempts 恒 0 不变。
 
+**首启失败与修复（2026-10-07 上午，三次启动全挂）**：
+- 现象：别名注册成功（日志 `PCIe alias registered over 35.66 GiB in 4424 runs`），紧接 `the profile fill failed at pair 0: ExpertCache::fill_slot_blocking: invalid argument` → 引擎 exit 1，server 轮询 "still starting" 至 ~255 s 截止（`Restart=no`，服务失败）。三次尝试（10:42/10:49/10:52）完全一致 → 确定性。
+- 当时显存状态：缓存 22.39 GiB 分出后 free < 1 GiB。对照 t7 实验（Ninfer 占 30.8/32.6 GiB 时）：`cudaHostRegister(...Mapped)` 本身即 `invalid argument`，且 sticky error 污染其后所有 CUDA 调用。
+- 根因方向：P0 是**一整块** 46.84 GiB MAPPED 注册（同显存水位下成功）；P4-A 是 **4424 个小段**（均 ~8.5 MiB）`cudaHostRegisterMapped`。MAPPED 每段建一个 device 侧 zero-copy 映射，数千段 + 显存近满 → 驱动资源耗尽，其后首个 HtoD `cudaMemcpy` 报 invalid argument（pair 0 属固定区、源指针未注册，普通 pageable 拷贝也挂了 → 指向"注册段的 device 侧资源"而非页本身）。
+- 修复（`engine/strata`，`engine/strata.pre-p4b` 为修复前备份）：4424 段注册去掉 `cudaHostRegisterMapped`，只留 `cudaHostRegisterPortable` 纯 pin——GPU 经 PCIe 读页只需页稳定，UVA 下 host 指针即 GPU 指针，`cudaHostGetDevicePointer` 照旧返回可用指针；每段 device 映射的开销随之消失。另在 `fill_slot_blocking` 失败时报告 pending error（sticky 与本次错误分列，`pinned.cu` gr_read 陷阱的同类坑）。
+- 待验证（需 GPU 空闲窗口）：重启后看 `PCIe alias registered over ~35.6 GiB` 且无 fill 失败 → 跑 A/B。若仍挂，后备：段数再降（按层 48 段）或整块注册（=P0 内存画像）。
+
 ## 10. 明确不做（后续单独立项）
 
 - 100% 显存专家释放 RAM（自适应换入变磁盘读）

@@ -3045,8 +3045,13 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
                               lay.blob_bytes(last / n_expert_) + 4095) & ~(uint64_t) 4095;
         if (end <= off) continue;
         void* d = nullptr;
+        // Plain pin, NOT cudaHostRegisterMapped: a MAPPED registration builds a device-side zero-copy
+        // mapping PER REGION, and with thousands of regions plus a nearly-full VRAM the driver ran out of
+        // that resource and the next HtoD copy died "invalid argument" (2026-10-07 P4-A startup failure).
+        // The pin alone is what the GPU needs: stable pages for its PCIe reads; on UVA the host pointer is
+        // already the GPU's pointer.
         if (cudaHostRegister((void*) (base_ + off), (size_t) (end - off),
-                             cudaHostRegisterPortable | cudaHostRegisterMapped) != cudaSuccess ||
+                             cudaHostRegisterPortable) != cudaSuccess ||
             cudaHostGetDevicePointer(&d, (void*) (base_ + off), 0) != cudaSuccess || d == nullptr) {
             (void) cudaGetLastError();
             ++refused;

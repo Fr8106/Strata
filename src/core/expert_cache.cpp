@@ -631,7 +631,12 @@ bool ExpertCache::fill_slot_blocking(int32_t slot, const uint8_t* host_blob, std
     const cudaError_t e = cudaMemcpy(dst, host_blob, n, cudaMemcpyHostToDevice);
 #endif
     if (e != cudaSuccess) {
+        // Report a DIFFERENT pending error too: a sticky fault from an earlier call lies about where it
+        // happened (the arena-registration trap in pinned.cu), and "invalid argument" here meant that.
+        const char* pending = cudaGetErrorString(cudaGetLastError());
         err = std::string("ExpertCache::fill_slot_blocking: ") + cudaGetErrorString(e);
+        if (std::string(pending) != cudaGetErrorString(e))
+            err += " (pending error: " + std::string(pending) + ")";
         return false;
     }
     ++fills_;
