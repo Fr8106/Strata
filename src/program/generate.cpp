@@ -202,6 +202,11 @@ bool refill_blocking() {
 
 using Clock = std::chrono::steady_clock;
 
+// P2's fixed tier (docs/EXPERT_SPLIT_PLAN.md): tier identity is the SLOT, not the expert in it - slots are the
+// address-stable byte regions of the VRAM arena, so "fixed" survives every swap (#533).  One predicate; every
+// path that picks a victim, lands a swap or lends slots asks it.  fixed_n == 0 (the default): never true.
+static inline bool is_fixed_slot(int32_t slot, int32_t fixed_n) { return slot >= 0 && slot < fixed_n; }
+
 // The resident RAM mode and the adaptive tier.  A swap copies `in` (held in RAM) into the slot of `out` (held only
 // by that slot).  Before the slot is overwritten, `out`'s bytes are copied back from it into an exchange buffer, so
 // the CPU computes `out` from RAM while the swap is in flight; when the swap has landed, `commit_exchanges` moves
@@ -495,6 +500,11 @@ struct Options {
     /// The vision path: keep a per-cell (t, h, w) rotary position table so --serve can take GENI requests.
     bool vision = false;
     int adapt_swaps = 96;
+    /// P2: `--expert-cache-fixed N` - the first floor(N% of slots) slots are a fixed tier: the profile ranking's
+    /// hottest experts, resident for the whole session, invisible to the adaptive tier's victim choice.
+    int expert_cache_fixed_pct = 0;
+    int fixed_n = 0;                        ///< the fixed tier's slot count, set once the cache is sized
+    int64_t fixed_evict_attempts = 0;      ///< release-build guard: swaps that reached a fixed slot (must stay 0)
     /// --serve: how many conversation checkpoints to keep between requests (0 = every request reads its whole
     /// prompt again, the v0.1.2 behaviour).  One is the GDN recurrence of the 36 layers, the QSA indexer tails and
     /// the PLE history (~118 MB of host RAM); the KV cache itself is positional and stays where it is.
@@ -673,6 +683,10 @@ void usage() {
                  "                       GPU via `moe_hit_grouped_s2`.  DEFAULT 0.  Measured at 4096 slots\n"
                  "                       with --expert-cache-per-layer: 54.4%% hits, CPU pool drain 19.1 -> 10.3\n"
                  "                       ms/token, -2.7 ms/token end to end.\n"
+                 "  --expert-cache-fixed N  split the VRAM cache: the first N%% of its slots (floor) form a FIXED\n"
+                 "                       tier, filled with the profile ranking's hottest experts at startup and\n"
+                 "                       never taken by an adaptive swap.  Needs --expert-profile; not with\n"
+                 "                       --vram-elastic, --layer-split or --expert-cache-per-layer.\n"
                  "  --expert-cache-device1 N|auto  fill CUDA1 with N experts or as many as fit\n"
                  "  --expert-cache-device2 N|auto  fill CUDA2 with more experts\n"
                  "  --expert-cache-device3 N|auto  fill CUDA3 with more experts\n"
@@ -1366,6 +1380,7 @@ int main(int argc, char** argv) {
             const std::string v = next("--expert-cache");
             o.expert_cache = (v == "auto") ? -1 : std::atoi(v.c_str());
         }
+        else if (a == "--expert-cache-fixed") o.expert_cache_fixed_pct = std::atoi(next("--expert-cache-fixed"));
         else if (a == "--expert-cache-device1" || a == "--expert-cache-device2" || a == "--expert-cache-device3") {
             const size_t r = (size_t) (a.back() - '1');
             const std::string v = next(a.c_str());
@@ -1901,6 +1916,24 @@ int main(int argc, char** argv) {
     if (o.expert_cache_remote_placement != "stripe" && o.expert_cache_remote_placement != "layer") {
         std::fprintf(stderr, "strata generate: --expert-cache-remote-placement must be stripe or layer\n");
         return 2;
+    }
+    // P2: the fixed tier is the cache's slot prefix, claimed by the profile fill in ranking order.  It needs a
+    // ranking (the profile), a cache that keeps its slots (not elastic, not per-layer) and one cache (not a split).
+    if (o.expert_cache_fixed_pct < 0 || o.expert_cache_fixed_pct > 100) {
+        std::fprintf(stderr, "strata generate: --expert-cache-fixed takes 0..100\n");
+        return 2;
+    }
+    if (o.expert_cache_fixed_pct > 0) {
+        const char* why = o.expert_cache_fixed_pct == 100 ? "it leaves the adaptive tier empty"
+                      : o.expert_profile.empty()         ? "it needs --expert-profile (the ranking decides what is fixed)"
+                      : o.vram_elastic                   ? "with --vram-elastic the tail shrink would reach into the fixed tier"
+                      : !o.layer_split.empty()           ? "with --layer-split every stage has its own cache"
+                      : o.expert_cache_per_layer         ? "with --expert-cache-per-layer slots belong to layers"
+                      : nullptr;
+        if (why) {
+            std::fprintf(stderr, "strata generate: --expert-cache-fixed refused: %s\n", why);
+            return 2;
+        }
     }
     if (o.remote_expert_opt && !o.serve) {
         std::fprintf(stderr, "strata generate: --remote-expert-opt requires --serve\n");
@@ -3494,6 +3527,27 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "strata generate: pre-filled %lld of %lld slots from the profile; slot 0 verified\n",
                      (long long) prefilled, (long long) (per_layer ? xcache.slots() : want));
     }
+    // P2: the fixed tier.  The fill above admitted in profile-ranking order from slot 0, so the first fixed_n
+    // slots hold exactly the hottest fixed_n experts - and the startup release (below) already handed their
+    // host pages back with every other VRAM-resident expert.  The bytes the two tiers hold:
+    if (o.expert_cache_fixed_pct > 0) {
+        o.fixed_n = (int) ((int64_t) xcache.slots() * o.expert_cache_fixed_pct / 100);   // floor
+        const int64_t fb = xcache.bytes_of(o.fixed_n);
+        std::fprintf(stderr, "strata generate: fixed tier: %d of %d slots (%.2f GiB of profile-hottest experts, "
+                             "never swapped); adaptive tier: slots %d..%lld (%.2f GiB)\n",
+                     o.fixed_n, (int) xcache.slots(), (double) fb / 1073741824.0, o.fixed_n,
+                     (long long) (xcache.slots() - 1), (double) (xcache.bytes() - fb) / 1073741824.0);
+        // P3 (revision #4): the per-layer spread of the fixed set - a layer far from the average is where the
+        // global ranking and this workload's routing disagree (V2 candidate: per-layer quota).
+        if (prefilled > 0) {
+            std::vector<int> cnt((size_t) g.n_layers, 0);
+            for (int64_t i = 0; i < std::min<int64_t>(o.fixed_n, prefilled); ++i) ++cnt[(size_t) profile[(size_t) i].first];
+            int lo = cnt[0], hi = cnt[0];
+            for (const int c : cnt) { lo = std::min(lo, c); hi = std::max(hi, c); }
+            std::fprintf(stderr, "strata generate: fixed tier per layer: %d..%d experts (avg %.1f of %lld)\n",
+                         lo, hi, (double) o.fixed_n / g.n_layers, (long long) g.n_expert);
+        }
+    }
 
     for (auto& stp : stages) {
         GpuStage& st = *stp;
@@ -4429,11 +4483,20 @@ int main(int argc, char** argv) {
     // copies are DMA from pinned RAM (Q2_0 8192 + a 384-slot ring: 1283 tok/s), 85% when host copies are the
     // limit (lending more only streams more through them).  STRATA_PREFILL_LEND_PCT overrides (tuning).
     // Hoisted out of plan_lend: the serve path's per-stage loans obey the same cap, one participant at a time.
-    const int64_t kAutoLendPct = [] {
+    int64_t kAutoLendPct = [] {
         const char* v = std::getenv("STRATA_PREFILL_LEND_PCT");
         return v ? (int64_t) std::atoi(v)
                  : (int64_t) (strata::prefill::Prefill::pinned_share() >= 0.9 ? 90 : 85);
     }();
+    // P2: the loan is the cache's slot TAIL ([slots-k, slots)); the fixed tier is the head ([0, fixed_n)).
+    // Capping the pct here caps every budget and fit test that reads it, so a loan can never overlap the
+    // fixed tier - the one structural way a fixed byte could be overwritten.
+    if (o.fixed_n > 0) {
+        const int64_t max_lend = std::max<int64_t>(0, xcache.slots() - o.fixed_n);
+        kAutoLendPct = std::min(kAutoLendPct, 100 * max_lend / std::max<int64_t>(1, xcache.slots()));
+        std::fprintf(stderr, "strata generate: fixed tier: the prompt loan is capped at %lld of %lld slots so its "
+                             "tail cannot reach the fixed head\n", (long long) max_lend, (long long) xcache.slots());
+    }
     // The largest chunk --prefill auto may pick: the operator's ceiling (--prefill auto:N) and never past the
     // context, but a bare `auto` always reaches 8192.  32768 and 16384 stay opt-in (#282): a 32K prompt with
     // IQ2_XS (RTX 5090, 64K context) read at 5,624 tok/s in 8192-token chunks and 6,465 in one 32768 chunk (40K
@@ -5467,6 +5530,9 @@ int main(int argc, char** argv) {
                 cudaMemcpy(st->d_res, host_res.data(), host_res.size() * sizeof(int32_t), cudaMemcpyHostToDevice);
             }
         };
+        // P2 item 13: the serve tier had NO telemetry (only the CLI lambda traced) - these counters give P4 its
+        // "swaps per window" and "fixed_evict_attempts must be 0" measurements.
+        int64_t adapt_rounds_s = 0, swaps_total_s = 0, novict_layers_s = 0;
         auto apply_pending = [&](bool wait) {
             if (peer.valid()) peer.apply_pending(wait);
             if (pending.empty()) return;
@@ -5492,6 +5558,7 @@ int main(int argc, char** argv) {
             if (!pending.empty()) return true;   // the previous swaps are still in flight
             if (remote_opt && !remote_opt->adapt(drive.d.usage, host_res, pending, o.adapt_swaps, *srcp)) return false;
             struct Swap { float gain; int32_t layer, in, out; };
+            int novict = 0;
             std::vector<Swap> swaps;
             std::vector<std::pair<float, int32_t>> cand, vict;
             for (int64_t l = 0; l < g.n_layers; ++l) {
@@ -5501,9 +5568,9 @@ int main(int argc, char** argv) {
                 const int32_t* r = host_res.data() + l * g.n_expert;
                 for (int32_t e = 0; e < (int32_t) g.n_expert; ++e) {
                     if (r[e] < 0) { if (u[e] >= 2.0f && !(peer.valid() && peer.has(l, e)) && !(remote_opt && remote_opt->owns(l, e))) cand.emplace_back(u[e], e); }
-                    else vict.emplace_back(u[e], e);
+                    else if (!is_fixed_slot(r[e], o.fixed_n)) vict.emplace_back(u[e], e);   // P2: the fixed tier is never a victim
                 }
-                if (cand.empty() || vict.empty()) continue;
+                if (cand.empty() || vict.empty()) { if (!cand.empty()) ++novict; continue; }
                 std::sort(cand.begin(), cand.end(), [](auto& a, auto& b) { return a.first > b.first; });
                 const size_t nc = std::min(cand.size(), vict.size());
                 std::partial_sort(vict.begin(), vict.begin() + (ptrdiff_t) nc, vict.end(),
@@ -5528,6 +5595,13 @@ int main(int argc, char** argv) {
             for (const Swap& s : swaps) {
                 const size_t in = (size_t) s.layer * g.n_expert + s.in, out = (size_t) s.layer * g.n_expert + s.out;
                 const int32_t slot = host_res[out];
+                // P2 item 9 (release guard): the victim filter above makes this unreachable; if it is ever
+                // reached the invariant broke, so count and skip the swap rather than abort.
+                if (is_fixed_slot(slot, o.fixed_n)) {
+                    if (++o.fixed_evict_attempts <= 3)
+                        std::fprintf(stderr, "strata serve: an adaptive swap reached fixed slot %d (skipped)\n", (int) slot);
+                    continue;
+                }
                 const uint8_t* b = srcp->blob(s.layer, s.in);
                 const int stn = multi_gpu ? stage_of(s.layer) : 0;   // the swap stays in the layer's own cache
                 GpuStage* gs = stn > 0 ? stages[(size_t) stn - 1].get() : nullptr;
@@ -5548,6 +5622,31 @@ int main(int argc, char** argv) {
             }
             if (!swaps.empty()) cudaEventRecord(adapt_ev, adapt_stream);
             (void) main_live;
+            ++adapt_rounds_s;
+            swaps_total_s += (int64_t) swaps.size();
+            novict_layers_s += novict;
+            if (!swaps.empty() || o.fixed_evict_attempts > 0) {
+                std::fprintf(stderr, "strata serve: adaptive tier: round %lld swapped %zu (total %lld), no-victim "
+                                     "layers this round %d (total %lld), fixed evict attempts %lld\n",
+                             (long long) adapt_rounds_s, swaps.size(), (long long) swaps_total_s,
+                             novict, (long long) novict_layers_s, (long long) o.fixed_evict_attempts);
+                // P3 (revision #4, mismatch diagnosis): the tiers' share of this round's routes.  A fixed tier
+                // that stops earning share (its experts stop being routed) is the signal to restart on a fresh
+                // profile - the fixed tier is a session-level policy, it does not re-rank itself.
+                if (o.fixed_n > 0 && !drive.d.usage.empty()) {
+                    double fu = 0, au = 0, tu = 0;
+                    for (size_t i = 0; i < drive.d.usage.size(); ++i) {
+                        const double u = drive.d.usage[i];
+                        tu += u;
+                        if (is_fixed_slot(host_res[i], o.fixed_n)) fu += u;
+                        else if (host_res[i] >= 0) au += u;
+                    }
+                    if (tu > 0)
+                        std::fprintf(stderr, "strata serve: expert tiers this round: routes fixed %.1f%%, adaptive "
+                                             "%.1f%%, CPU miss %.1f%%\n",
+                                     fu / tu * 100.0, au / tu * 100.0, (tu - fu - au) / tu * 100.0);
+                }
+            }
             for (auto& st : stages)
                 if (st->adapt_live) {
                     const strata::core::OnDevice on(st->dev);
@@ -5580,6 +5679,11 @@ int main(int argc, char** argv) {
             std::string e;
             const auto ranked = strata::core::rank_learned_profile(g.n_layers, g.n_expert, resident, heat,
                                                                    profile_loaded);
+            // P3: one generation of history.  A bad session must not destroy the only good profile: the file the
+            // NEXT start will read is kept as <path>.prev before the atomic replace (tmp + rename inside).
+            std::error_code ec;
+            if (std::filesystem::exists(o.expert_profile_save, ec))
+                std::filesystem::rename(o.expert_profile_save, o.expert_profile_save + ".prev", ec);
             if (strata::core::write_expert_profile(o.expert_profile_save, g.n_layers, g.n_expert, ranked, e))
                 std::fprintf(stderr, "strata serve: expert profile saved to %s (%s)\n", o.expert_profile_save.c_str(),
                              why);
@@ -7487,7 +7591,8 @@ int main(int argc, char** argv) {
             if (k > 0 && request_sized < chunk) {                     // no bigger than this prompt segment needs
                 chunk = request_sized;
                 k = lend_slots(chunk);
-                if (k + 128 > xcache.slots()) k = 0;
+                // P2: and never past the fixed head (this arm skips the pct check).
+                if (k + 128 > xcache.slots() || (o.fixed_n > 0 && k > xcache.slots() - o.fixed_n)) k = 0;
                 if (!o.prefill_auto) o.prefill_chunk = chunk;
             }
             if (o.prefill_auto) {
@@ -7919,7 +8024,7 @@ int main(int argc, char** argv) {
                 const int32_t* r = host_res.data() + l * g.n_expert;
                 for (int32_t e = 0; e < (int32_t) g.n_expert; ++e) {
                     if (r[e] < 0) { if (u[e] >= 2.0f) cand.emplace_back(u[e], e); }
-                    else vict.emplace_back(u[e], e);
+                    else if (!is_fixed_slot(r[e], o.fixed_n)) vict.emplace_back(u[e], e);   // P2: the fixed tier is never a victim
                 }
                 if (cand.empty() || vict.empty()) continue;
                 std::sort(cand.begin(), cand.end(), [](auto& a, auto& b) { return a.first > b.first; });
@@ -7948,6 +8053,12 @@ int main(int argc, char** argv) {
             for (const Swap& s : swaps) {
                 const size_t in = (size_t) s.layer * g.n_expert + s.in, out = (size_t) s.layer * g.n_expert + s.out;
                 const int32_t slot = host_res[out];
+                // P2 item 9 (release guard): the victim filter makes this unreachable; count and skip, never abort.
+                if (is_fixed_slot(slot, o.fixed_n)) {
+                    if (++o.fixed_evict_attempts <= 3)
+                        std::fprintf(stderr, "strata: an adaptive swap reached fixed slot %d (skipped)\n", (int) slot);
+                    continue;
+                }
                 const uint8_t* b = srcp->blob(s.layer, s.in);
                 // asynchronous: the copies run while the MTP drafts; the next window waits for them
                 if (slot < 0 || b == nullptr ||
