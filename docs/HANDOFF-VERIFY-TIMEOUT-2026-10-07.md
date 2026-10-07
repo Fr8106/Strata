@@ -117,3 +117,28 @@ KV streaming: 90.62% of 1232400 block reads hit VRAM, 465.5 MiB read from RAM
 - LLM 已回 **swift15**（ninfer，8088，用户手动拉起）；strata.service **inactive**。
 - `strata-iq3_s.json` 停在 `--kv-resident 131072`（方案 A 上限）。
 - 方案 B（tier 有序 arena）代码已提交 main，全验收通过；本问题与其**无关**（fill/canary 均正常，故障在 serve 期的 verify 窗口）。
+
+---
+
+## 8. 脚本化复现（2026-10-08 00:09–00:29 新增，三臂）——**故障已复现；两处缓解被证伪**
+
+**工作负载**（`tools/repro/kv-multi-smoke.py`，窗口脚本 `tools/repro/aprime-win.sh`）：**3 个大会话同时发起**（160K / 130K / 100K tokens，`max_tokens 512`），8090 窗口服务器，引擎同生产（P4-B binary）。
+
+| 臂 | 配置 | 100K | 130K | 160K | dmesg |
+|---|---|---|---|---|---|
+| 1 | max-context 262144 / conv-cache 6144 | OK 27 s | **HTTP 400 @83 s** | 卡死（900 s 客户端超时；GPU 100%、日志静默）| — |
+| 2 | 262144 / 3072（A′）| OK 27 s | 卡死（290 s+，人工终止）| 卡死 | — |
+| 3 | **393216** / 3072 | OK 27 s | **HTTP 400 @83 s，body 即 `verify: timed out at layer 29 … (#267)`** | 卡死（240 s 超时）| NVRM 中断风暴 + **Xid 31 MMU Fault**（收尾期）|
+
+**结论**：
+1. **第 3 臂完整复现生产故障**：`verify: timed out at layer 29; its GPU waits were released but the GPU did not finish within 5 s (#267)` + NVRM 中断风暴 + Xid 31——与 10-07 22:xx 实际使用故障同型。
+2. **A′（conv-cache 3072）被证伪**：不避免故障；且实测其代价（第二个大会话被 `evictions=1` 逐出 → 重 prefill 25.4 s）。
+3. **加大 KV 池（max-context 393216）也被证伪**：故障照发，且池子够大时引擎并发跑多请求 → verify 图直接被饿死报 #267。
+4. **§2.1 的机理需要修正**：触发量不是"会话缓存让多会话同时 live"，而是**并发活跃请求的 live KV 总和**——会话缓存无关紧要（3 个并发请求本身就够了）；2×100K(=200K cells) 无恙、3×(130–160K)(≈390K cells ≫ 131K 常驻窗) 必坏。
+5. 引擎行为两态：**"磨"**（live 超窗 → 每请求 200–680 MiB PCIe 流式 → 20×+ 慢，请求挂）或 **"死"**（池子容得下并发 → verify 图饿死 → #267）。客户端的 HTTP 400 很可能就是本故障（引擎把 #267 错误经 server 映射为 400），而不是参数错误——排查时不要被 400 误导。
+6. 复现材料：`tools/repro/aprime-results.txt`（本轮＝臂 3 的数值；臂 1/2 数值见上表）、`tools/repro/aprime-server-maxctx393.log`（#267 原文）、`strata-iq3_s.log` 00:25–00:29 段。
+
+**对修复方向的含意**：
+- **B（verify 饱和期让位/自适应 deadline）**能消除"死"这一支，不解决"磨"。
+- 需要一条新方向——**方案 E：并发准入/排队**。把"同时活跃请求的 live KV 总量"约束在常驻窗量级（超出即排队或拒绝），或按池容量限制并发大请求数。当前引擎没有这个闸门：一批大请求来了就照单全收，然后或磨或死。
+- 立即可用的运维缓解：避免 ≥3 个大会话（100K+）同时活跃；把同时活跃的大会话控制在 ≤2 路（总 live ≲ 200K cells）时实测无恙。

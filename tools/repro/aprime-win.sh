@@ -21,22 +21,33 @@ PORT=8090
 W_SIZES=${W_SIZES:-100000,100000}
 W_ROUNDS=${W_ROUNDS:-2}
 W_MAXTOK=${W_MAXTOK:-16}
+W_ARMS=${W_ARMS:-"arm1-6144:6144 arm2-3072:3072"}
+export TIMEOUT=${W_TIMEOUT:-900}   # per-request client timeout, seconds
 : > "$RES"; : > "$SLOG"
 log() { echo "$(date +%T) $*" | tee -a "$RES"; }
 cp "$CFG" "$BAK"
 
 set_conv_cache() { sed -i "/\"--conversation-cache-mib\"/{n;s/\"[0-9]*\"/\"$1\"/}" "$CFG"; }
 
-# 1) dead-man
+# 1) dead-man (only when this run must put the LLM back; RESTORE_LLM=0 leaves swift15 stopped)
+RESTORE_LLM=${RESTORE_LLM:-1}
 sudo systemctl stop llm-deadman.timer llm-deadman.service >>"$RES" 2>&1
-sudo systemd-run --on-active=30m --unit=llm-deadman docker start "$CTR" >>"$RES" 2>&1
-log "dead-man timer set (30 min)"
+if [ "$RESTORE_LLM" = 1 ]; then
+    sudo systemd-run --on-active=30m --unit=llm-deadman docker start "$CTR" >>"$RES" 2>&1
+    log "dead-man timer set (30 min)"
+else
+    log "RESTORE_LLM=0 - no dead-man; swift15 stays stopped after this run"
+fi
 
 restore() {
     cp "$BAK" "$CFG"
-    log "RESTORE (trap): config restored, docker start $CTR"
-    docker start "$CTR" >>"$RES" 2>&1
-    sleep 3
+    if [ "$RESTORE_LLM" = 1 ]; then
+        log "RESTORE (trap): config restored, docker start $CTR"
+        docker start "$CTR" >>"$RES" 2>&1
+        sleep 3
+    else
+        log "RESTORE (trap): config restored; swift15 left stopped (RESTORE_LLM=0)"
+    fi
     sudo systemctl stop llm-deadman.timer llm-deadman.service >>"$RES" 2>&1
 }
 trap restore EXIT
@@ -104,7 +115,7 @@ stop_arm() {
     log "engine stopped (VRAM $used MiB)"
 }
 
-for arm in "arm1-6144:6144" "arm2-3072:3072"; do
+for arm in $W_ARMS; do
     label=${arm%%:*}; mib=${arm##*:}
     start_arm "$label" "$mib" || { log "[$label] engine not ready - skipping the workload"; stop_arm; continue; }
     snap "[$label] idle"
@@ -121,13 +132,17 @@ for arm in "arm1-6144:6144" "arm2-3072:3072"; do
     stop_arm
 done
 
-# 4) restore the LLM (the standing rule's explicit step)
+# 4) restore the LLM (the standing rule's explicit step; skipped with RESTORE_LLM=0)
 trap - EXIT
 cp "$BAK" "$CFG"
 if [ "$used" -ge 1024 ]; then
-    log "ABORT: orphan VRAM ${used} MiB - NOT starting the LLM; find the holder with nvidia-smi and kill it"
+    log "ABORT: orphan VRAM ${used} MiB - find the holder with nvidia-smi and kill it"
     sudo systemctl stop llm-deadman.timer llm-deadman.service >>"$RES" 2>&1
     exit 1
+fi
+if [ "$RESTORE_LLM" != 1 ]; then
+    log "swift15 left stopped (RESTORE_LLM=0); window closed"
+    exit 0
 fi
 docker start "$CTR" >>"$RES" 2>&1
 log "swift15 started (explicit)"

@@ -19,15 +19,18 @@ generations (e.g. SIZES=160000,130000,100000 MAXTOK=512).
 
 usage: kv-multi-smoke.py [SIZES=100000,100000] [ROUNDS=2] [PORT=8090] [MAXTOK=16] [LABEL=workload]
   SIZES: comma-separated word counts (~1 token per word), one per conversation
+  TIMEOUT env var (seconds, default 900): per-request client timeout - keep it short when
+  the point is "does it still finish promptly", not "how long does it grind".
 exit 0 iff every request completed.
 """
-import concurrent.futures, json, random, sys, time, urllib.request
+import concurrent.futures, json, os, random, sys, time, urllib.request, urllib.error
 
 SIZES  = [int(x) for x in (sys.argv[1] if len(sys.argv) > 1 else "100000,100000").split(",")]
 ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else 2
 PORT   = int(sys.argv[3]) if len(sys.argv) > 3 else 8088
 MAXTOK = int(sys.argv[4]) if len(sys.argv) > 4 else 16
 LABEL  = sys.argv[5] if len(sys.argv) > 5 else "workload"
+TIMEOUT = int(os.environ.get("TIMEOUT", "900"))
 N      = len(SIZES)
 BASE   = f"http://127.0.0.1:{PORT}"
 MODEL  = json.load(open("/home/ai/Strata/strata-iq3_s.json"))["model_name"]
@@ -54,9 +57,12 @@ def ask(conv, rnd):
                                         "Authorization": "Bearer ninfer-local"})
     t0 = time.time()
     try:
-        with urllib.request.urlopen(r, timeout=900) as f:
+        with urllib.request.urlopen(r, timeout=TIMEOUT) as f:
             d = json.loads(f.read().decode())
         return f"{LABEL} r{rnd} conv{conv}: OK in {time.time()-t0:.1f}s usage={d.get('usage', {})}"
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:160]
+        return f"{LABEL} r{rnd} conv{conv}: HTTP {e.code} after {time.time()-t0:.1f}s: {body}"
     except Exception as e:
         return f"{LABEL} r{rnd} conv{conv}: FAILED after {time.time()-t0:.1f}s: {e}"
 

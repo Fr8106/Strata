@@ -53,7 +53,10 @@ P0 基线 → P1 专家层切 mmap 文件后端 → P1.5 自适应层验证 → 
 - **收窄结论**：触发量是 **live KV 总量**（会话缓存 6144 MiB/4 slots 让 2–3 个 127K+ 会话同时 live，`parked=3 bytes=6.26 GB`，总 live ≫ 131K 常驻窗）→ 每请求 200–465 MiB KV 经 PCIe 流式 → GPU 饱和 → verify 图饿死。放大因素＝显存 **298 MiB free 贴地**（代码自注"贴地 paging → verify 自旋永不完成"警戒带）。
 - **反直觉点**：原版 20 s prefill 不报错，是因为原版 RAM/disk-bound、**GPU 有空闲**；"把 prefill 变快"本身制造了 verify 饿死的条件。KV 侧相对 P0 唯一改动只是 `--kv-resident 32K→131K`（方案 A，只止血单会话，131K 已是显存硬上限）。
 - **已交接**：`docs/HANDOFF-VERIFY-TIMEOUT-2026-10-07.md`（`4f24486`），请专家裁定：**B**（verify 饱和期让位/自适应 deadline）vs **A′**（压并发 live，配置止血）vs **C**（live-KV 封顶驱逐），外加 298 MiB free 是否本就是 bug、Xid 31 是否独立故障。
-- **A′ 对照（23:43 窗口，`tools/repro/aprime-win.sh`，结果 `tools/repro/aprime-results.txt`）：两臂均未触发，未构成复现**。工作负载＝2 个 ~100K 会话并行 ×2 轮（`kv-multi-smoke.py`）。arm1（6144，阳性对照）4/4 完成、0 超时、0 重启，流式仅 110–140 MiB/请求（真实故障时 207–465 MiB）；arm2（3072）同样 4/4 完成（付出了应有的代价：会话缓存 `evictions=1`，第二个大会话丢缓存→重 prefill 25.4 s）。结论：**"live 总量超窗"单条件不足以饿死 verify 图**，需要更强负载（更大会话 127K–163K / 更长生成 / 3 路并发）才能复现；A′ 仍未验证。
+- **脚本化复现已达成（10-08 00:09–00:29，三臂，`tools/repro/aprime-win.sh` + `kv-multi-smoke.py`，结果 `aprime-results.txt`）**：负载＝3 个大会话并发（160K/130K/100K，max_tokens 512）。
+  - **臂 3（max-context 393216）完整复现生产故障**：`verify: timed out at layer 29 … (#267)`（客户端看到的是 HTTP 400，body 即 #267 原文）+ NVRM 中断风暴 + Xid 31；160K 请求卡死（240 s 超时）。
+  - **两处缓解被证伪**：A′（conv-cache 3072）与加大 KV 池（max-context 393216）都不避免故障；臂 1（262144/6144）同样出现 130K 请求 @83 s 的 400（同型）。
+  - 机理修正：触发量是**并发活跃请求的 live KV 总和**，与会话缓存无关（2×100K=200K cells 无恙；3×130–160K≈390K cells ≫ 131K 常驻窗 必坏）；引擎二态——池不够则"磨"（20×+ 慢、请求挂），池够则并发跑多请求 → verify 图饿死"死"（#267）。
 
 ## 6. 当前机器与代码状态
 
@@ -101,6 +104,7 @@ P0 基线 → P1 专家层切 mmap 文件后端 → P1.5 自适应层验证 → 
 1. **B 的形态优先选"饱和期动态降级推测解码（关 spec / 缩窗），而不是"跳过/放宽 verify"**。理由：verify 图是推测解码的验证窗口（`verify.cpp`：`--spec` 的 drafts 才需要 verify）——关闭推测时**没有 draft 就没有验证需求**，正确性语义保守（退化到普通解码，只是变慢）；而"跳过/放宽 verify"意味着 draft 的接受判定可能被跳过或延迟，存在正确性漏检风险，需要专家确认 `#267` 的 `release_gpu_waits` 语义后定夺。`--spec` 目前是启动常量，需要引擎加运行时开关。
 2. **饱和判据无需新埋点**：现成可用的信号已有三类——`KV streaming: X% of N block reads hit VRAM, Y MiB read from RAM`（每请求）、每轮 `expert tiers this round: fixed/adaptive/miss`（每轮）、`cudaMemGetInfo` 的 free VRAM（README 已有 298 MiB 打印）。组合（流式字节速率 + freeVRAM 下限）即可定义"饱和"。
 3. **顺序建议**：先跑 A′ 对照（已就位，判"live 总量"假设真假、且本身是可用止血）→ 等专家回复 → 实现 B（含 §7.3-③3 的余量地板）→ 再谈 C。
+4. **（10-08 新增）方案 E：并发准入/排队**。复现证明引擎对"同时活跃请求的 live KV 总量"没有任何闸门：一批大请求照单全收，然后或磨（20×+ 慢）或死（#267）。B 只治"死"；"磨"要 E 来治——超出常驻窗量级的请求排队（而不是并发进场），或按池容量限制并发大请求数。当前立即可用的运维缓解：同时活跃的大会话 ≤2 路（总 live ≲200K cells 实测无恙）。
 
 ### 7.5 未测项清单（明确登记）
 
