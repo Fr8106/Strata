@@ -3235,17 +3235,20 @@ bool ArenaExpertSource::canary(std::string& err, bool pageable) {
         const size_t n = regd ? 3 : 1;
         for (size_t k = 0; k < n; ++k) {
             const uint64_t p = k == 0 ? off : (k == 1 ? ((off + end) >> 1) & ~(uint64_t) 4095 : end - 65536);
-            if (cudaMemcpy(scratch, (void*) (base_ + p), 65536, cudaMemcpyHostToDevice) != cudaSuccess) {
+            const cudaError_t rc = cudaMemcpy(scratch, (void*) (base_ + p), 65536, cudaMemcpyHostToDevice);
+            if (rc != cudaSuccess) {
                 (void) cudaGetLastError();
                 err = "canary: the HtoD from layer " + std::to_string(l) +
-                      (pageable ? " (unregistered) failed" : " failed");
+                      (pageable ? " (unregistered) " : " ") + cudaGetErrorString(rc);
                 cudaFree(scratch); cudaFreeHost(back);
                 return false;
             }
-            if (cudaMemcpy(back, scratch, 256, cudaMemcpyDeviceToHost) != cudaSuccess ||
-                std::memcmp(back, base_ + p, 256) != 0) {
+            const cudaError_t rc2 = cudaMemcpy(back, scratch, 256, cudaMemcpyDeviceToHost);
+            if (rc2 != cudaSuccess || std::memcmp(back, base_ + p, 256) != 0) {
                 (void) cudaGetLastError();
-                err = "canary: the read-back from layer " + std::to_string(l) + " mismatches";
+                err = "canary: the read-back from layer " + std::to_string(l) +
+                      (rc2 != cudaSuccess ? " failed: " + std::string(cudaGetErrorString(rc2))
+                                         : " mismatches");
                 cudaFree(scratch); cudaFreeHost(back);
                 return false;
             }

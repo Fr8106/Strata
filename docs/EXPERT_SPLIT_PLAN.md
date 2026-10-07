@@ -322,6 +322,13 @@ A/B 的 3.1 GiB 峰值低于 8 GiB 安全线，用户裁定立项方案 B（专�
 
 **验收（需 GPU 窗口）**：日志 `tier-ordered layout` + `PCIe alias registered over ~35–47 GiB in 9x tier runs` + fill 全槽 + `expert arena: ~11 GiB of VRAM-held experts handed back to the OS`（真数，非 0）+ 峰值 MemAvailable 回升到 8 GiB 线以上 + 32K prefill 不劣于 A/B 的 4468 tok/s + `fixed evict attempts` 恒 0 + 无 `fixed-tier expert ... released` 告警。
 
+**窗口实测（2026-10-07 20:25–20:28，`tools/repro/optionb-win.sh`，`tools/repro/optionb-results.txt`；RTX 5090 + 62 GiB，swift15 停后 VRAM 34 MiB 起）**：
+- `tier-ordered layout (24576 profiled experts lead each layer)` ✅；`PCIe alias registered over 46.84 GiB in 96 tier runs`（0 拒）✅；`pre-filled 11797 of 11797 slots` ✅；**`expert arena: 11.19 GiB of VRAM-held experts handed back to the OS`** ✅（P4-A 此行打 0）。
+- 内存目标达成：峰值 MemAvailable **16.2 GiB**（32K 档后），高于 8 GiB 安全线；空闲时 18.9 GiB；未换页（SwapFree 6.5 GiB）。
+- `fixed evict attempts` 恒 0 ✅；无 `fixed-tier expert ... released` 告警 ✅；tier 遥测 fixed 29–31% / adaptive 65–67% / CPU miss 3.7–3.8%。
+- **未过项：canary L0 失败，降级 L2**（`WARNING: PCIe alias degraded to L2 (canary: the HtoD from layer 6 failed)`）。同上下文 48-run 形状两次 L0 通过（19:26/19:33），96-run 形状挂——形状相关的驱动状态差异。后果：非固定区走 pageable HMM（~17 GB/s = 注册路径 28.4 的 60%），32K prefill 2866–2902 tok/s（A/B 4468 的 ~64%；1K 418–445）。
+- canary 失败信息已补 `cudaGetErrorString(rc)`（下次窗口可直接读出驱动拒因）；取证窗口（`STRATA_PCIE_REGLOG` + `CUDA_LOG_FILE` + dmesg + 形状复现）待用户放行。
+
 ## 10. 明确不做（后续单独立项）
 
 - 100% 显存专家释放 RAM（自适应换入变磁盘读）
