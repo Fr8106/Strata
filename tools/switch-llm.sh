@@ -106,7 +106,7 @@ case "${1:-}" in
     wait_ready strata 300 || { log "失败。strata 日志尾部:"; tail -n 5 "$STRATA_DIR/strata-iq3_s.log"; tail -n 5 "$STRATA_OUT"; cleanup_strata; exit 1; }
     smoke; log "已切到 Strata";;
   ninfer)
-    if ninfer_ready && ! strata_pid; then log "ninfer 已在服务，无需切换"; exit 0; fi
+    if ninfer_ready && [ -z "$(strata_pid)" ]; then log "ninfer 已在服务，无需切换"; exit 0; fi
     stop_strata; start_ninfer
     wait_ready ninfer 600 || { log "失败：ninfer 未就绪"; docker logs --tail 5 "$CONTAINER"; exit 1; }
     smoke; log "已切到 ninfer";;

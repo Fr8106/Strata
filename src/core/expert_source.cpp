@@ -2909,6 +2909,16 @@ bool ArenaExpertSource::open(const std::string& pack_dir, int64_t n_layers, int6
 }
 
 void ArenaExpertSource::close() {
+    // selective mode owns its registrations: the arena never saw them (kDeferRegistration), so it is this
+    // class that hands them back - PinnedArena's own unregister loop would otherwise fire at nothing.
+    if (base_ != nullptr && !alias_runs_.empty()) {
+        for (uint64_t off : alias_runs_) cudaHostUnregister((void*) ((uint8_t*) base_ + off));
+        (void) cudaGetLastError();
+    }
+    alias_runs_.clear();
+    host_free_.clear();
+    blob_dev_.clear();
+    layer_alias_.clear();
 #if !defined(_WIN32)
     if (map_ != nullptr) munmap(map_, (size_t) map_bytes_);
 #endif
@@ -2946,29 +2956,121 @@ uint64_t ArenaExpertSource::release(int64_t layer, int64_t expert) {
     (void) layer; (void) expert;
     return 0;
 #else
-    if (map_ == nullptr || layer < 0 || expert < 0 || expert >= n_expert_) return 0;
+    if (layer < 0 || expert < 0 || expert >= n_expert_) return 0;
+    const uint8_t* m = (const uint8_t*) map_;
+    if (m == nullptr) {
+        // Selective registration (register_pcie_alias): ONLY the blobs the caller named as fixed (host_free_)
+        // may be dropped - they sit in VRAM for the whole session and nothing reads their host bytes after
+        // the profile fill, so DONTNEED on their anonymous pages really frees them (unmapped zero pages, no
+        // re-read: every later reader goes through the miss set, which never contains a fixed expert).
+        // A blob that merely LACKS an alias (the driver refused its run) must keep its pages: it is an
+        // ordinary expert that the CPU pool will read again if it ever leaves VRAM.
+        const uint64_t g = (uint64_t) layer * n_expert_ + (uint64_t) expert;
+        if (host_free_.empty() || base_ == nullptr || g >= host_free_.size() ||
+            host_free_[(size_t) g] == 0) return 0;
+        m = base_;
+    }
     const auto& lay = strata::kernels::cpu::expert_layout();
     const uint64_t off = (lay.blob_offset(layer, expert) + 4095) & ~(uint64_t) 4095;
     const uint64_t end = (lay.blob_offset(layer, expert) + lay.blob_bytes(layer)) & ~(uint64_t) 4095;
     if (end <= off) return 0;
-    if (madvise((uint8_t*) map_ + off, (size_t) (end - off), MADV_DONTNEED) != 0) return 0;
+    if (madvise((uint8_t*) m + off, (size_t) (end - off), MADV_DONTNEED) != 0) return 0;
     return end - off;
 #endif
 }
 
 bool ArenaExpertSource::pinned(int64_t layer, int64_t expert) const {
     if (base_ == nullptr || layer < 0 || expert < 0 || expert >= n_expert_) return false;
+    if (!blob_dev_.empty())
+        return (uint64_t) layer < (uint64_t) (blobs_ / n_expert_) &&
+               blob_dev_[(size_t) layer * n_expert_ + (size_t) expert] != nullptr;
     const auto& lay = strata::kernels::cpu::expert_layout();
     return lay.blob_offset(layer, expert) + lay.blob_bytes(layer) <= pinned_bytes_;
 }
 
 const uint8_t* ArenaExpertSource::device_alias(int64_t layer, int64_t expert) const {
+    if (!blob_dev_.empty()) {
+        if (layer < 0 || expert < 0 || expert >= n_expert_) return nullptr;
+        const uint64_t g = (uint64_t) layer * n_expert_ + (uint64_t) expert;
+        return g < blob_dev_.size() ? blob_dev_[(size_t) g] : nullptr;
+    }
     if (dev_slice_.empty() || !pinned(layer, expert)) return nullptr;
     const auto& lay = strata::kernels::cpu::expert_layout();
     if (slice_bytes_ == 0) return dev_slice_[0] + lay.blob_offset(layer, expert);
     // one registration slice per layer
     if ((size_t) layer >= dev_slice_.size()) return nullptr;
     return dev_slice_[(size_t) layer] + (uint64_t) expert * lay.blob_bytes(layer);
+}
+
+bool ArenaExpertSource::pcie_layer(int64_t layer) const {
+    if (!blob_dev_.empty())
+        return layer >= 0 && (size_t) layer < layer_alias_.size() && layer_alias_[(size_t) layer] != 0;
+    return device_alias(layer, 0) != nullptr;
+}
+
+// The fixed-tier split (docs/EXPERT_SPLIT_PLAN.md P4).  The caller defers the arena's registration
+// (PinnedArena::kDeferRegistration); it happens here, run by run: blobs in `skip` - the fixed tier's, pinned
+// in VRAM for the whole session and never read from host bytes after the profile fill - are left unregistered,
+// every maximal run of the rest is registered, and each blob keeps its own device pointer.  Runs align
+// OUTWARD to page bounds: the shared edge page of a skipped neighbour gets pinned with it, which costs one
+// page and keeps `d + (blob_offset - run_off)` valid for every blob of the run.  Two runs never overlap:
+// a native blob is megabytes, wider than any two pages of slack.  A run the driver refuses leaves its blobs
+// null - like an unregistered slice of the capped mode, those experts just keep the CPU path.
+bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err) {
+    if (base_ == nullptr || map_ != nullptr || !blob_dev_.empty()) {
+        err = "register_pcie_alias: the arena is not in selective-registration mode";
+        return false;
+    }
+    const auto& lay = strata::kernels::cpu::expert_layout();
+    // host_free_ outlives this call: release() frees ONLY these named blobs' host pages.  A run the driver
+    // refused also has null blob_dev_ entries, and equating "no alias" with "fixed" would zero a live
+    // expert's only host copy when it later left VRAM - the skip set is the authority, not the alias table.
+    host_free_.assign((size_t) blobs_, 0);
+    for (const auto& s : skip)
+        if (s.first >= 0 && s.second >= 0 && s.second < n_expert_ &&
+            (uint64_t) s.first < (uint64_t) (blobs_ / n_expert_))
+            host_free_[(size_t) s.first * n_expert_ + (size_t) s.second] = 1;
+    blob_dev_.assign((size_t) blobs_, nullptr);
+    layer_alias_.assign((size_t) (blobs_ / n_expert_), 0);
+    int runs = 0, refused = 0;
+    uint64_t bytes = 0;
+    int64_t g = 0;
+    while (g < blobs_) {
+        if (host_free_[(size_t) g]) { ++g; continue; }
+        const int64_t from = g;
+        while (g < blobs_ && !host_free_[(size_t) g]) ++g;
+        const int64_t last = g - 1;
+        const uint64_t off = (uint64_t) lay.blob_offset(from / n_expert_, from % n_expert_) & ~(uint64_t) 4095;
+        const uint64_t end = ((uint64_t) lay.blob_offset(last / n_expert_, last % n_expert_) +
+                              lay.blob_bytes(last / n_expert_) + 4095) & ~(uint64_t) 4095;
+        if (end <= off) continue;
+        void* d = nullptr;
+        if (cudaHostRegister((void*) (base_ + off), (size_t) (end - off),
+                             cudaHostRegisterPortable | cudaHostRegisterMapped) != cudaSuccess ||
+            cudaHostGetDevicePointer(&d, (void*) (base_ + off), 0) != cudaSuccess || d == nullptr) {
+            (void) cudaGetLastError();
+            ++refused;
+            continue;
+        }
+        ++runs;
+        bytes += end - off;
+        alias_runs_.push_back(off);
+        for (int64_t k = from; k <= last; ++k) {
+            blob_dev_[(size_t) k] = (const uint8_t*) d +
+                ((uint64_t) lay.blob_offset(k / n_expert_, k % n_expert_) - off);
+            layer_alias_[(size_t) (k / n_expert_)] = 1;
+        }
+    }
+    if (runs == 0) {
+        blob_dev_.clear(); layer_alias_.clear(); alias_runs_.clear(); host_free_.clear();
+        err = "register_pcie_alias: the driver refused every run";
+        return false;
+    }
+    std::fprintf(stderr, "strata generate: expert arena: PCIe alias registered over %.2f GiB in %d runs%s; the "
+                         "fixed tier's %zu experts stay unregistered and releasable\n",
+                 (double) bytes / 1073741824.0, runs,
+                 refused ? (", " + std::to_string(refused) + " run(s) refused").c_str() : "", skip.size());
+    return true;
 }
 
 const uint8_t* ArenaExpertSource::blob(int64_t layer, int64_t expert) {

@@ -672,8 +672,17 @@ public:
     int64_t reads() const { return reads_; }
     bool pinned(int64_t layer, int64_t expert) const override;
     const uint8_t* device_alias(int64_t layer, int64_t expert) const override;
+    /// Selective registration answers "does this layer have any alias" from the per-layer map - the base's
+    /// "expert 0 has one" would refuse a whole layer whose expert 0 happens to be the fixed tier's.
+    bool pcie_layer(int64_t layer) const override;
     void prefetch(int64_t layer, int64_t expert) override;
     uint64_t release(int64_t layer, int64_t expert) override;
+
+    /// The fixed-tier split (docs/EXPERT_SPLIT_PLAN.md P4): register the anonymous arena EXCEPT the experts
+    /// named in `skip` - the fixed tier is pinned in VRAM for the whole session and nothing reads its host
+    /// bytes after the profile fill, so registering it would pin bytes nothing ever touches.  The rest keeps
+    /// the verify window's PCIe alias.  `pinned()` and `device_alias()` answer per expert from the result.
+    bool register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err);
 
     /// What backing was obtained and why, for the startup print.  "The engine adapts to the machine it is on" is
     /// only true if the engine says what it got.
@@ -693,6 +702,10 @@ private:
     void* map_ = nullptr;            ///< STRATA_ARENA_MMAP: the arena file, mapped read-only (not the PinnedArena)
     uint64_t map_bytes_ = 0;
     std::vector<const uint8_t*> dev_slice_;   ///< device alias of each registered slice (or of the whole range)
+    std::vector<const uint8_t*> blob_dev_;    ///< selective mode: per-blob device alias, null = CPU-side
+    std::vector<uint8_t> layer_alias_;        ///< selective mode: 1 = the layer has at least one aliased expert
+    std::vector<uint64_t> alias_runs_;        ///< selective mode: start of each registered run, for unregister
+    std::vector<uint8_t> host_free_;          ///< selective mode: 1 = the fixed tier's blob, host copy discardable
     uint64_t slice_bytes_ = 0;
     const uint8_t* base_ = nullptr;
     int64_t blobs_ = 0;

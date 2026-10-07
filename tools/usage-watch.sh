@@ -10,7 +10,7 @@ prev_err=0
 while [ "$(date +%s)" -lt "$END" ]; do
   ts=$(date '+%F %T')
   eng=$(pgrep -f 'engine/strata --serve' | head -1 || true)
-  if [ -z "$eng" ]; then echo "$ts CRIT engine not running" >> "$OUT"; exit 1; fi
+  if [ -z "$eng" ]; then echo "$ts CRIT engine not running (staying up for the restart)" >> "$OUT"; sleep 30; continue; fi
   hb=$(curl -sf -m 5 http://127.0.0.1:8088/health 2>/dev/null | tr -d ' ' || true)
   err=$(grep -c -E 'copy failed|refill failed|reached fixed slot|CUDA error' "$LOG" 2>/dev/null || true)
   breach=$(grep -c 'reached fixed slot' "$LOG" 2>/dev/null || true)

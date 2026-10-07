@@ -1929,6 +1929,10 @@ int main(int argc, char** argv) {
                       : o.vram_elastic                   ? "with --vram-elastic the tail shrink would reach into the fixed tier"
                       : !o.layer_split.empty()           ? "with --layer-split every stage has its own cache"
                       : o.expert_cache_per_layer         ? "with --expert-cache-per-layer slots belong to layers"
+                      : o.expert_cache_remote[0] > 0 || o.expert_cache_remote[1] > 0 ||
+                        o.expert_cache_remote[2] > 0 || o.expert_cache_remote_auto[0] ||
+                        o.expert_cache_remote_auto[1] || o.expert_cache_remote_auto[2]
+                          ? "each --expert-cache-deviceN card has its own cache; the fixed head exists only on the first"
                       : nullptr;
         if (why) {
             std::fprintf(stderr, "strata generate: --expert-cache-fixed refused: %s\n", why);
@@ -3150,6 +3154,7 @@ int main(int argc, char** argv) {
     }
     strata::core::ArenaExpertSource arena_src;
     strata::core::ExpertSource* srcp = nullptr;
+    bool selective_alias = false;   // set in the arena branch; gates the registration below
     if (o.mmap_experts) {
         // FileExpertSource maps the pack's experts.bin: a canonical pack has it; a native (IQ) pack has it when
         // built with `tools/iq_pack.py --experts-bin` (the per-layer blob sizes of its layout, PR #121).  The low-RAM
@@ -3192,7 +3197,14 @@ int main(int argc, char** argv) {
         else if (pin_wddm_cap)
             std::fprintf(stderr, "strata generate: multi-GPU under WDDM: at most 8 GiB of the expert arena is pinned "
                                  "(STRATA_ARENA_PIN_GIB changes it)\n");
-        if (!arena_src.open(o.pack, g.n_layers, g.n_expert, /*threads=*/6, err, pin_limit,
+        // P4 (docs/EXPERT_SPLIT_PLAN.md): with the fixed tier, register the arena per expert instead of
+        // wholesale, so the fixed tier's host copy - never read after the fill - can be handed back for real.
+        // Deferred to after the ranking is known; see register_pcie_alias below.  A pin cap (WDDM, remote
+        // experts, STRATA_ARENA_PIN_GIB) keeps the old slice-by-slice behaviour.
+        selective_alias = o.expert_cache_fixed_pct > 0 && o.pcie_frac > 0 &&
+                          pin_limit == 0 && o.shared_expert_arena.empty();
+        if (!arena_src.open(o.pack, g.n_layers, g.n_expert, /*threads=*/6, err,
+                            selective_alias ? (uint64_t) strata::core::PinnedArena::kDeferRegistration : pin_limit,
                             o.shared_expert_arena)) {
             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
             return 1;
@@ -3479,6 +3491,17 @@ int main(int argc, char** argv) {
         } else {
             std::fprintf(stderr, "                 PROFILE, ranked by routing frequency, no eviction.\n");
         }
+    }
+    // P4 (docs/EXPERT_SPLIT_PLAN.md): the deferred selective registration.  The fixed set is the ranking's
+    // first `fixed_n` pairs; everything else gets its PCIe alias back.  Runs BEFORE the fill below, so the
+    // fill's copies come from registered memory.
+    if (selective_alias && !profile.empty()) {
+        const int64_t fn = std::min<int64_t>((int64_t) xcache.slots() * o.expert_cache_fixed_pct / 100,
+                                             (int64_t) profile.size());
+        std::string aerr;
+        if (!arena_src.register_pcie_alias({profile.begin(), profile.begin() + fn}, aerr))
+            std::fprintf(stderr, "strata generate: %s: the PCIe share falls back to the CPU pool\n",
+                         aerr.c_str());
     }
     // ---- R4.2e: fill the tier from the profile.  This is the only place the plan is applied, and it runs
     // ONCE: with `slots` pairs and `slots` slots the cache is full when this returns, so the decode-time
@@ -4589,7 +4612,9 @@ int main(int argc, char** argv) {
         }
         for (int64_t c = chunk; c >= 256; c /= 2) {
             const int64_t k = slots_for(c);
-            if (k + 128 <= xcache.slots()) { chunk = c; return k; }
+            // P2: a fixed chunk (--prefill N, not auto) sizes straight from the chunk - it must still keep
+            // the loan inside the adaptive tail like the auto arm's capped pct does.
+            if (k + 128 <= xcache.slots() && k + o.fixed_n <= xcache.slots()) { chunk = c; return k; }
         }
         return 0;
     };
@@ -5671,6 +5696,7 @@ int main(int argc, char** argv) {
         };
         // #477: write the learned profile (between requests and at QUIT: a prompt's lent slots are back by then).
         // A swap still in flight counts as done - its expert is resident once the copy lands.  `why`: for the log.
+        bool profile_rotated = false;   // P3: the .prev rotation is once per session, see below
         auto save_profile = [&](const char* why) {
             if (heat.empty()) return;
             std::vector<uint8_t> resident(host_res.size(), 0);
@@ -5679,11 +5705,16 @@ int main(int argc, char** argv) {
             std::string e;
             const auto ranked = strata::core::rank_learned_profile(g.n_layers, g.n_expert, resident, heat,
                                                                    profile_loaded);
-            // P3: one generation of history.  A bad session must not destroy the only good profile: the file the
-            // NEXT start will read is kept as <path>.prev before the atomic replace (tmp + rename inside).
+            // P3: one generation of history.  A bad session must not destroy the only good profile: the file this
+            // session STARTED from is kept as <path>.prev before the first replace (tmp + rename inside).  The
+            // rotation happens once - rotating on every save would bury the seed under the session's own output
+            // within one save interval, which is exactly what the .prev exists to survive.
             std::error_code ec;
-            if (std::filesystem::exists(o.expert_profile_save, ec))
-                std::filesystem::rename(o.expert_profile_save, o.expert_profile_save + ".prev", ec);
+            if (!profile_rotated && std::filesystem::exists(o.expert_profile_save, ec)) {
+                std::error_code rec;
+                std::filesystem::rename(o.expert_profile_save, o.expert_profile_save + ".prev", rec);
+                profile_rotated = !rec;
+            }
             if (strata::core::write_expert_profile(o.expert_profile_save, g.n_layers, g.n_expert, ranked, e))
                 std::fprintf(stderr, "strata serve: expert profile saved to %s (%s)\n", o.expert_profile_save.c_str(),
                              why);

@@ -39,6 +39,11 @@ struct PinnedArena {
     uint64_t slice_bytes = 0;
     int registered_slices = 0;
 
+    /// Pass this as `max_pinned_bytes` to register NOTHING here: the caller registers the runs it wants
+    /// afterwards (the fixed-tier split - the fixed prefix is deliberately left unregistered, so its pages
+    /// can be released for real).  Registration and the working-set lock are both skipped.
+    static constexpr uint64_t kDeferRegistration = ~0ull;
+
     PinnedArena() = default;
     /// `slice`: the piece size for the per-slice registration fallback (0 = none).
     explicit PinnedArena(uint64_t bytes, uint64_t slice = 0);

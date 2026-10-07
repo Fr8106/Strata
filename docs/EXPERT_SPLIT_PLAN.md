@@ -263,6 +263,21 @@ strata generate: pre-filled 12045 of 12045 slots from the profile
 
 `[日志]` 值来自 `strata-iq3_s.log`（2026-10-06 23:58 会话，engine 0.1.39，791 个请求）。活体指标（VmPin、噪声范围、带压 p99、KV 占用、major faults、SSD read、启动耗时）需引擎运行态，随 P1 前的一次短会话补齐。
 
+## 9.5 P4 前置（2026-10-07）：恢复 GPU 别名 = 选择性注册（已实现，待重启验证）
+
+用户裁定：prefill −48% 不可接受，原设计（未驻留专家经 `cudaHostRegister` 别名 + pcie-frac 0.55 由 GPU 直读）必须保留；别名只需覆盖**非固定区**专家。
+
+**实测（引擎停机窗口，GPU 空闲）**：
+- file-backed 映射（ro/shared，匿名对照同时成功）`cudaHostRegister` → **`invalid argument`**：驱动不支持注册文件映射页，mmap 模式下别名不可能存在（`expert_source.cpp:2733` 注释为真）。
+- 匿名 arena **按分散 run 注册**：3 run 264 MiB 全部成功，GPU 读校验一致，注册仅 23 ms（全量 ~4.5k run 预计秒级）。
+- 匿名未注册区 `MADV_DONTNEED` → 页真实释放（读回零）；已注册区 DONTNEED → 驱动保页、GPU 读仍正确（无害）。
+- memlock 8 MiB 不拦路（P0 曾成功注册 46.84 GiB）。
+
+**实现（P4-A，匿名 arena 选择性注册，~90 行）**：`PinnedArena::kDeferRegistration` 延迟注册；`ArenaExpertSource::register_pcie_alias(skip)` 按每层连续 run 注册非固定区（run 外对齐到页边界，per-expert 设备指针表 + per-layer `pcie_layer` 覆写）；`release()` 在未注册（固定区）匿名页上真 DONTNEED；`pinned()/device_alias()/pcie_layer()` 查表。固定区 host 副本（11.2 GiB）在启动 release 后真正归还；其余 35.6 GiB 常驻可别名。消费侧零改动（capped 模式先例已容忍逐专家无别名）。
+
+配置：删 `STRATA_ARENA_MMAP` 与 `--pcie-frac 0`（恢复 auto→0.55）。回滚：`strata-iq3_s.json.pre-p4` + `engine/strata.pre-p4`。
+预期与验收（重启后对照 §9）：`expert arena: PCIe alias registered over ~35.6 GiB in ~4.5k runs`；全量 prefill 回 ~5.5–6k tok/s；RSS ≈ pinned 35.6 + 引擎开销；MemAvailable ~15 GiB（推算）；fixed evict attempts 恒 0 不变。
+
 ## 10. 明确不做（后续单独立项）
 
 - 100% 显存专家释放 RAM（自适应换入变磁盘读）

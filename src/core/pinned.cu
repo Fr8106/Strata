@@ -340,7 +340,9 @@ PinnedArena::PinnedArena(uint64_t bytes, const std::vector<uint64_t>& bounds,
 
     // Register with CUDA BEFORE any page is touched: cudaHostRegister pins what is resident now, and a region
     // that has already been faulted in page by page is far more expensive to register and may fail outright.
-    if (base) {
+    if (base && max_pinned_bytes == kDeferRegistration) {
+        note = "registration deferred to the caller; " + note;
+    } else if (base) {
         // #243: STRATA_ARENA_PIN_GIB=N caps the registration from the start where the caller set no cap
         const int env_gib = arena_pin_cap_gib();
         uint64_t cap = max_pinned_bytes;
@@ -431,7 +433,10 @@ PinnedArena::~PinnedArena() {
         if (locked_bytes) strata::platform::unlock_resident((uint8_t*) base + (slice_bytes ? registered_bytes : 0), locked_bytes);
         if (slice_bytes) {
             for (uint64_t off : slice_starts) cudaHostUnregister((uint8_t*) base + off);
-        } else {
+        } else if (registered_bytes) {
+            // registered_bytes == 0 means NOTHING was registered here (a refused registration, or
+            // kDeferRegistration): unregistering the base would set a sticky InvalidValue, and this
+            // codebase has already paid for one stale error (see the gr_read note above).
             cudaHostUnregister(base);
         }
         release(mapping_base ? mapping_base : base, mapping_bytes ? mapping_bytes : capacity);
