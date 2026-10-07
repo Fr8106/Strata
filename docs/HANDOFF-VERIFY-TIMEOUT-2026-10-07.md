@@ -1,0 +1,119 @@
+# 交接文档：Strata 大 prompt 下 verify 窗口超时（求助人类专家）
+
+**日期**：2026-10-07　**机器**：RTX 5090 32 GiB + 62 GiB RAM + Ryzen 9 5900X，Ubuntu 24.04，驱动 610.57.04，CUDA 13.0
+**模型**：Qwen3.8-Flash-Next（48 层 × 512 专家，IQ3_S，`strata-iq3_s.json`）
+**状态**：方案 B（tier 有序 arena）已全验收通过；本问题是**实际使用测试**中暴露的新故障，配置层（方案 A）只能部分缓解。
+
+---
+
+## 0. 一句话求助
+
+大 prompt（≥88K，实测 88K/126K/158K/163K）下，引擎报
+`verify: timed out at layer N; its GPU waits were released but the GPU did not finish within 5 s (#267)`，
+随后引擎自停、server 慢重启（2+ 分钟不可用）、dmesg 出现 NVRM 中断风暴 + Xid 31 MMU Fault。
+**layer 号不固定**（实测 4/6/7/22/23），**同尺寸有时成功有时失败**（162,776 Done，163,108 Error）——是竞态/饱和，不是干净的尺寸阈值。
+请专家判断：这是 **verify 图与主计算争抢 GPU 资源的结构性缺陷**，还是显存余量（298 MiB free）触发的驱动 paging？修复方向应是 **B（verify deadline 自适应）** 还是 **压住 live KV 总量**？
+
+---
+
+## 1. 症状（确切证据）
+
+- 报错行（`src/core/verify.cpp:1474/1477`）：
+  `verify: timed out at layer N; its GPU waits were released but the GPU did not finish within 5 s (#267)`
+- 机制：`Verifier::run` 在独立 stream 上 launch 一个 CUDA graph，host 线程自旋等 GPU 逐层写 `seq` 计数器，**每层 5 s 硬超时**（`release_gpu_waits(5000)`）。超时 → 引擎 `EngineDied` → server 重启引擎（`reading the model's weights ... a minute or two`）。
+- dmesg（每次故障后）：
+  - `NVRM: Going over RM unhandled interrupt threshold for irq 166`（重复多次，~40 s 间隔）
+  - `Xid 31 ... MMU Fault: ENGINE GRAPHICS ... FAULT_PTE ACCESS_TYPE_VIRT_READ @ 0x71d5_3c049000`（收尾期，是卡死状态的**后果**非起因）
+- 面板表现：请求 `Error`，随后 8088 无响应数分钟。
+
+**时间线（2026-10-07，本地时间）**：
+| 时间 | prompt | 结果 |
+|---|---|---|
+| 22:03:40 | 88,177 | verify 超时 layer 6 → 引擎停 |
+| 22:19:22 | 126,903 | verify 超时 layer 22 → 引擎停 |
+| 22:4x | 158,708 | verify 超时 layer 4 → 引擎停 |
+| 22:50 | 122,058 / 163,108 | verify 超时 layer 7 → 引擎停（122K < 131K 窗口仍失败！）|
+| 22:49:18 | 162,776 | **Done**（同尺寸成功 → 竞态）|
+
+---
+
+## 2. 根因分析（已用日志证据收窄）
+
+### 2.1 直接触发：live KV 总量超过 VRAM 常驻窗，强制 PCIe 流式
+`--kv-resident` 决定每 QSA 层常驻 VRAM 的 cell 数。当前 `131072`（131K）。
+但**会话缓存**（`--conversation-cache-mib 6144 --conversation-cache-slots 4`）会让**多个大会话同时 live**：
+
+```
+conversation cache: parked 127085 tokens ... parked=2 bytes=3006074900   # 两个大会话
+conversation cache: parked 158867 tokens ... parked=3 bytes=6260885700   # 三个大会话共存
+KV streaming: 82.92% of 301932 block reads hit VRAM, 207.8 MiB read from RAM
+KV streaming: 90.62% of 1232400 block reads hit VRAM, 465.5 MiB read from RAM
+```
+
+3 个 127K–163K 会话同时 live ⇒ live KV ≈ 300K+ cells ≫ 131K 窗口 ⇒ 每请求 200–465 MiB 从 pinned RAM 经 PCIe（Gen4 x16 ~28 GB/s）流式进 VRAM ⇒ **GPU 队列饱和** ⇒ 并行的 verify graph 在 5 s/层 内跑不完 ⇒ 超时。
+
+**关键反证**：122,058 token 单请求 < 131K 窗口，本应全常驻，但因其它大会话同时 live 仍触发流式 + 超时。⇒ 触发量是 **live 总量**，不是单请求尺寸。
+
+### 2.2 放大因素：显存余量贴地（298 MiB free）
+`strata serve: 298 MiB of VRAM free with everything loaded`。代码自注（`generate.cpp:5953-5958`）：
+> under WDDM a GPU filled to the brim does not fail, it pages — and a page-in while the verify graph spins on a host flag stalls the request for good.
+
+298 MiB 紧贴代码自身的 ~256 MiB 警戒带（低于才告警）。显存贴地 + verify 自旋 ⇒ 驱动可能 page GPU 内存 ⇒ verify 图"never finishes"。**Xid 31 / 中断风暴与此一致。**
+
+### 2.3 专家缓存已自动让位（非瓶颈）
+`--expert-cache auto` 随 kv-resident 增大自动缩：`11797 slots (32K) → 11400 (98K) → 11199 (131K)`，VRAM free 恒 298 MiB。专家侧已无余量再让。
+
+---
+
+## 3. 我已做的（方案 A，配置层，效果有限）
+
+`strata-iq3_s.json` 的 `--kv-resident`：`32768 → 98304 → 131072`（备份 `strata-iq3_s.json.pre-kvres96`）。
+- 效果：88K/126K 单会话场景缓解（常驻窗变大，流式减少）。
+- **不足**：① 显存到顶，131K 已是上限（再大都撑爆专家缓存）；② 多大会话并发时 live 总量仍超窗，122K/158K/163K 仍超时；③ 不解决 verify 图在 GPU 饱和时的结构性脆弱。
+
+**结论：方案 A 是止血不是根治。需要方案 B 或 live-KV 封顶。**
+
+---
+
+## 4. 候选修复（请专家裁定方向）
+
+| 方案 | 改动 | 效果 | 风险/代价 |
+|---|---|---|---|
+| **A′ 压 live 总量**（配置） | `--conversation-cache-mib 6144→~3200`、`--conversation-cache-slots 4→2`，使同时 live 的大会话 ≤1 个（≤131K） | 消除"多大会话并发超窗"触发 | 用户失去多大会话并行缓存；小会话不受影响 |
+| **B verify deadline 自适应**（代码） | `src/core/verify.cpp`：超时时不直接 `EngineDied`，改为**放宽/跳过该窗口**（饱和期暂停 canary），或 deadline 随 KV 流式速率缩放 | 根治"饱和即杀引擎"；canary 在饱和期让位 | 需定义"饱和"判据；canary 在高压期暂时失察（正确性窗口让位）；`#267` 的 `release_gpu_waits` 路径要同步处理 |
+| **C live-KV 封顶**（代码） | 引擎在 live KV > 常驻窗时**主动驱逐最冷 parked 会话**（而非让其流式） | 从源头消除超窗流式 | 驱逐策略 + 会话缓存语义改动较大 |
+| **显存余量** | 提高 `--vram-reserve-mib`（现 700，实测被压到 298 free）| 降低"贴地 paging"概率 | 挤占专家缓存/常驻窗，与 3 冲突 |
+
+**我倾向 B（治本）+ A′（立即止血）**：A′ 让用户当前多大会话场景不再触发；B 让引擎在真正饱和时不再自杀。C 更彻底但改动面大，可作后续。
+
+---
+
+## 5. 具体想请专家回答
+
+1. **verify 图饱和时让位是否安全**：verify 是正确性 canary。高压期"跳过/放宽"窗口，会不会漏掉它要抓的那类 bug？`#267` 的 `release_gpu_waits` 语义下，跳过窗口要动哪些状态？
+2. **饱和判据**：用什么信号判断"GPU 正在 KV 流式饱和"（PCIe 利用率？block-read 命中率 < 阈值？verify 窗口等待时长 > X）？引擎里现成可采的量有哪些？
+3. **298 MiB free 是否本就是 bug**：`--vram-reserve-mib 700` 应保 700，实测只剩 298 —— 是 reserve 被 `reserve_adapted` 压低了（日志有 `reserve was lowered` 分支），还是预算算错？显存贴地本身是否就该告警/拒载？
+4. **Xid 31 / 中断风暴**：是 verify 自旋 + 贴地 paging 的必然后果，还是独立故障？是否需要单独处理（如显存贴地时禁 verify）？
+5. **会话缓存语义**：`--conversation-cache-mib/slots` 是 RAM（parked）预算，但触发的是 VRAM（live）超窗。是否应有"live KV ≤ 常驻窗"的硬约束（方案 C）？
+
+---
+
+## 6. 复现 + 文件
+
+- **复现**：起 strata（`tools/switch-strata.sh` 闭环），并发 2–3 个 ≥127K 会话（`tools/repro/kv-long-smoke.py` 可发 120K+ 单请求；多会话并发用面板连发）。看 `strata-iq3_s.log` 的 `verify: timed out` + `KV streaming ... read from RAM`。
+- **关键文件**：
+  - 配置：`strata-iq3_s.json`（`--kv-resident 131072`、`--conversation-cache-mib 6144`、`--vram-reserve-mib 700`、`--expert-cache auto`）
+  - verify 机制：`src/core/verify.cpp`（`Verifier::run` 1390+、`release_gpu_waits`、`#267`）
+  - 显存预算/告警：`src/program/generate.cpp:5953-5973`（free-mib 三分支 + 自注）
+  - 专家缓存自动缩放：`src/program/generate.cpp:427`（`--expert-cache auto`）
+  - 日志：`strata-iq3_s.log`（本次会话从 51330 行起）
+  - 闭环脚本：`tools/switch-strata.sh`、`tools/repro/kv-long-smoke.py`
+- **dmesg 证据**：`sudo dmesg -T | grep -iE 'xid|nvrm'`（22:03–22:06 段：irq 166 中断风暴 + Xid 31）
+
+---
+
+## 7. 当前机器状态（交接时）
+
+- LLM 已回 **swift15**（ninfer，8088，用户手动拉起）；strata.service **inactive**。
+- `strata-iq3_s.json` 停在 `--kv-resident 131072`（方案 A 上限）。
+- 方案 B（tier 有序 arena）代码已提交 main，全验收通过；本问题与其**无关**（fill/canary 均正常，故障在 serve 期的 verify 窗口）。
