@@ -1,0 +1,37 @@
+NInfer-kaushikvira-swift15
+07:34:56 VRAM released (used=34 MiB)
+07:34:59 [gpu] vision.gpu=True
+=== [gpu] startup (everything loaded) ===
+strata generate: KV streaming: 32768 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache auto: 23.29 GiB free, 700 MiB reserved (+218 MiB for the draft head) -> 9029 slots
+strata generate: expert cache 11797 slots, 22.39 GiB of VRAM; policy is
+strata serve: 300 MiB of VRAM free with everything loaded
+nvidia-smi used: 31847 MiB
+VmRSS:	  509020 kB
+VmRSS:	43191844 kB
+text-gpu: 1/1 requests completed
+image-gpu: OK in 1.8s usage={'prompt_tokens': 638, 'completion_tokens': 64, 'total_tokens': 702, 'prompt_tokens_details': {'cached_tokens': 0}}
+--- [gpu] after the image request:
+nvidia-smi used: 31929 MiB
+strata serve: decode expert cache hit rate: 84.3% (6257 hits / 7419 lookups); 741 more read by the GPU over PCIe or from another GPU (9.1% of all 8160 routed)
+strata serve: prompt 638 tokens = 0 reused + 638 read in 1029 ms (619.9 tok/s), 64 generated in 639 ms (100.1 tok/s), drafts accepted 40 of 51, 1 checkpoints
+strata serve: decode expert cache hit rate: 82.1% (26418 hits / 32170 lookups); 3830 more read by the GPU over PCIe or from another GPU (10.6% of all 36000 routed)
+07:36:01 engine stopped (VRAM 34 MiB)
+07:36:01 [cpu] vision.gpu=False
+=== [cpu] startup (everything loaded) ===
+strata generate: KV streaming: 32768 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache auto: 24.90 GiB free, 700 MiB reserved (+218 MiB for the draft head) -> 9680 slots
+strata generate: expert cache 12636 slots, 24.00 GiB of VRAM; policy is
+strata serve: 299 MiB of VRAM free with everything loaded
+nvidia-smi used: 31848 MiB
+VmRSS:	  678604 kB
+VmRSS:	42356804 kB
+text-cpu: 1/1 requests completed
+image-cpu: OK in 5.2s usage={'prompt_tokens': 638, 'completion_tokens': 64, 'total_tokens': 702, 'prompt_tokens_details': {'cached_tokens': 0}}
+--- [cpu] after the image request:
+nvidia-smi used: 31930 MiB
+strata serve: decode expert cache hit rate: 97.2% (9683 hits / 9961 lookups); 119 more read by the GPU over PCIe or from another GPU (1.2% of all 10080 routed)
+strata serve: prompt 638 tokens = 0 reused + 638 read in 967 ms (659.8 tok/s), 64 generated in 560 ms (114.2 tok/s), drafts accepted 33 of 59, 1 checkpoints
+strata serve: decode expert cache hit rate: 92.2% (38555 hits / 41805 lookups); 1875 more read by the GPU over PCIe or from another GPU (4.3% of all 43680 routed)
+07:37:02 engine stopped (VRAM 34 MiB)
+07:37:02 window closed; swift15 left stopped
