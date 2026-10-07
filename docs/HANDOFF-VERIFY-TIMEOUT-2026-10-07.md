@@ -134,11 +134,17 @@ KV streaming: 90.62% of 1232400 block reads hit VRAM, 465.5 MiB read from RAM
 1. **第 3 臂完整复现生产故障**：`verify: timed out at layer 29; its GPU waits were released but the GPU did not finish within 5 s (#267)` + NVRM 中断风暴 + Xid 31——与 10-07 22:xx 实际使用故障同型。
 2. **A′（conv-cache 3072）被证伪**：不避免故障；且实测其代价（第二个大会话被 `evictions=1` 逐出 → 重 prefill 25.4 s）。
 3. **加大 KV 池（max-context 393216）也被证伪**：故障照发，且池子够大时引擎并发跑多请求 → verify 图直接被饿死报 #267。
-4. **§2.1 的机理需要修正**：触发量不是"会话缓存让多会话同时 live"，而是**并发活跃请求的 live KV 总和**——会话缓存无关紧要（3 个并发请求本身就够了）；2×100K(=200K cells) 无恙、3×(130–160K)(≈390K cells ≫ 131K 常驻窗) 必坏。
-5. 引擎行为两态：**"磨"**（live 超窗 → 每请求 200–680 MiB PCIe 流式 → 20×+ 慢，请求挂）或 **"死"**（池子容得下并发 → verify 图饿死 → #267）。客户端的 HTTP 400 很可能就是本故障（引擎把 #267 错误经 server 映射为 400），而不是参数错误——排查时不要被 400 误导。
+4. **§2.1 的机理需要修正（源码核实，见 §8.1）**：触发量**不是**"多会话同时 live"——`--batch 0` 下请求严格串行（server FIFO + 引擎单命令循环），任何时刻只有一个请求持有活跃 KV；会话缓存只管 parked（主机 RAM），不占 cell。真正相关的是**单条大 prompt 的 KV 流式读负载**：residency map 只有 131072/262144 cells，实测一条 100K prompt 就产生 ~677 MiB 的 PCIe KV 拷贝（5% block miss）——这是"磨"的直接来源；而"死"（#267）是 verify 的每步 20 s doorbell 握手被同一份 PCIe/显存压力拖爆。
+5. 引擎行为两态：**"磨"**（大 prompt 的 KV 流式拷贝 + 显存贴地 → 20×+ 慢，请求挂）或 **"死"**（verify 握手某步 >20 s → `ERR`+`return 1` → 引擎进程退出 → server 重启 → 在途请求全灭）。客户端的 HTTP 400 **就是 #267 错误经 server 映射的结果**（`serve/server.py:3185/3187`），不是参数错误。
 6. 复现材料：`tools/repro/aprime-results.txt`（本轮＝臂 3 的数值；臂 1/2 数值见上表）、`tools/repro/aprime-server-maxctx393.log`（#267 原文）、`strata-iq3_s.log` 00:25–00:29 段。
 
-**对修复方向的含意**：
+### 8.1 源码对照（2026-10-08，三份代码分析的核心事实）
+
+- **并发**：`serve/server.py:1678,2290` 每请求持进程级 FIFO；引擎 serve 循环一次取一条命令（`src/program/generate.cpp:6484-6492`）；`--batch 0` 时整段读 prompt（`:7164`），"chunk 边界让行"（BYIELD/YIELDED，`:7188-7215`）只存在于 `--batch > 0`。`--batch N` = N 个**启动时预 carve** 的 slot session，各带完整 `max_context`，放不下就整个关掉（`:3013-3031`）。
+- **KV 池**（`include/strata/kernels/kv_stream.hpp:1-20` 设计注释）：流式层的**权威 K/V 在 pinned host**（identity 布局），VRAM 是 `n_slots` 页的 **residency map**；每次 attention 前 `kv_stream_resolve` 对选中 block 做 CLOCK 淘汰 + PCIe 拷贝（`src/kernels/cuda/kv_stream.cu:82-158`）；写永远写 host 副本、resident 才写 slot。`--kv-resident` 只决定 VRAM 页数（钳 ≥20480，`layer.cpp:537,556`）；host pinned 副本是**全量**（随 `--max-context`，262144→3.09 GiB / 393216→4.64 GiB）。准入只看静态 `n + max_new + 8 > max_context`（`generate.cpp:6689-6692`），不看别的请求；conversation cache 是主机 RAM 预算，parked 不占 cell，内存不足时只是跳过 park。
+- **verify 窗口**（`src/core/verify.cpp`）：doorbell 握手——GPU 每层写 `seq`（`src/kernels/cuda/elementwise.cu:308-326`），host 自旋（`verify.cpp:1444-1479`）后跑 CPU expert pool、发 plan、抬 `flag`，GPU 在 `wait_flag_ge_kernel`（`src/kernels/cuda/verify_kernels.cu:496-499`）空转等。**每（层,组）步的 host 自旋上限是 20 s（`:1467`），不是 5 s**；错误串里的 5 s 是释放旗标后等 stream 排空（`release_gpu_waits(5000)`，`:1472/:1477`；drain 成功会说 "and the GPU finished"）。失败**不可恢复**：`released_=true` 后该 Verifier 拒绝一切后续窗口（`:1396,:1900`），调用方 `ERR`+`return 1`（`generate.cpp:7431-7432`）→ 引擎进程退出 → server `EngineDied` + 重启（`serve/server.py:595`，`RESTART_RETRY_S=15`）。verify 流全是 `cudaStreamNonBlocking`，与主解码流**无优先级、无事件绑定**（`:476-484`）；饱和期没有超时自适应或降级。
+
+**对修复方向的含意（10-08 按源码修正）**：
 - **B（verify 饱和期让位/自适应 deadline）**能消除"死"这一支，不解决"磨"。
-- 需要一条新方向——**方案 E：并发准入/排队**。把"同时活跃请求的 live KV 总量"约束在常驻窗量级（超出即排队或拒绝），或按池容量限制并发大请求数。当前引擎没有这个闸门：一批大请求来了就照单全收，然后或磨或死。
-- 立即可用的运维缓解：避免 ≥3 个大会话（100K+）同时活跃；把同时活跃的大会话控制在 ≤2 路（总 live ≲ 200K cells）时实测无恙。
+- "磨"的根源是**单条大 prompt 的 KV 流式读**（residency map 之外的 block 每次 attention 经 PCIe 补页；实测 100K prompt 已 ~677 MiB），叠加显存贴地（298 MiB free）。抓手：① 提高 `--kv-resident`（VRAM 从专家缓存借；`auto` 会自动缩小专家槽）；② 让 prompt/上下文不超过常驻窗量级；③ 给 verify 加饱和期降级（同 B）。
+- **"并发准入/排队"不是方向**（源码证明 `--batch 0` 已严格串行；"并发 live KV"不存在）。**立即可用的运维缓解：单条请求的 prompt/上下文控制在 ≲120K tokens**——实测 100K 无恙、130K/160K 触发（130K 直接 #267，160K 磨死）；超过 residency map（131072 cells）就走 PCIe 流式，风险陡增。
