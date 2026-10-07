@@ -1,0 +1,62 @@
+Failed to stop llm-deadman.timer: Unit llm-deadman.timer not loaded.
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+Running timer as unit: llm-deadman.timer
+Will run service as unit: llm-deadman.service
+21:50:17 dead-man timer set (25 min)
+NInfer-kaushikvira-swift15
+21:50:21 swift15 stopped
+21:50:21 VRAM released (used=34 MiB)
+21:50:23 page cache dropped (cold start, 59.2814 GiB
+21:50:23 deployed build/strata -> engine/strata
+21:50:23 server starting (pid 17101)
+21:51:18 server answering on :8090
+=== memory: post-startup (idle, after the fixed-tier release) (21:51:28) ===
+MemAvailable:   19251776 kB
+Unevictable:       53404 kB
+SwapFree:        6651900 kB
+AnonHugePages:  35704832 kB
+some avg10=11.52 avg60=16.56 avg300=5.56 total=25457162
+vram: 31847 MiB
+VmPin:	       0 kB
+VmRSS:	42885320 kB
+req 00 warmup: 2.2s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 16, 'total_tokens': 1068, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 01 warmup: 1.7s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 16, 'total_tokens': 1068, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 02 warmup: 1.6s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 16, 'total_tokens': 1068, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 03 32K: 8.4s wall, usage={'prompt_tokens': 32052, 'completion_tokens': 128, 'total_tokens': 32180, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 04 32K: 8.3s wall, usage={'prompt_tokens': 32052, 'completion_tokens': 128, 'total_tokens': 32180, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 05 32K: 8.3s wall, usage={'prompt_tokens': 32052, 'completion_tokens': 128, 'total_tokens': 32180, 'prompt_tokens_details': {'cached_tokens': 0}}
+=== memory: post-32K-tier (peak) (21:51:58) ===
+MemAvailable:   16338000 kB
+Unevictable:       53404 kB
+SwapFree:        6741244 kB
+AnonHugePages:  35704832 kB
+some avg10=0.57 avg60=10.05 avg300=5.01 total=25461317
+vram: 31949 MiB
+VmPin:	       0 kB
+VmRSS:	45756792 kB
+21:51:58 === P4-B lines (this run) ===
+strata generate: expert arena: tier-ordered layout (24576 profiled experts lead each layer; the fixed tier is released after the profile fill)
+strata generate: expert arena: PCIe alias registered over 46.84 GiB in 96 tier runs; the fixed tier's 5898 experts are released (unregister + DONTNEED) after the profile fill
+strata generate: PCIe alias canary passed (L0: Mapped zero-copy)
+strata generate: pre-filled 11797 of 11797 slots from the profile; slot 0 verified
+strata generate: expert arena: 11.19 GiB of VRAM-held experts handed back to the OS
+strata serve: usage seeded from the 24576-pair profile (rank 0 = 1.0, unprofiled = 0)
+21:51:58 === engine per-request lines (this run) ===
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1867 ms (563.6 tok/s), 16 generated in 240 ms (66.8 tok/s), drafts accepted 8 of 10, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1537 ms (684.4 tok/s), 16 generated in 196 ms (81.7 tok/s), drafts accepted 9 of 14, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1407 ms (747.7 tok/s), 16 generated in 156 ms (102.8 tok/s), drafts accepted 9 of 14, 1 checkpoints
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 7113 ms (4506.2 tok/s), 128 generated in 1141 ms (112.2 tok/s), drafts accepted 52 of 102, 2 checkpoints
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 7257 ms (4416.8 tok/s), 128 generated in 948 ms (135.1 tok/s), drafts accepted 50 of 84, 2 checkpoints
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 7200 ms (4451.7 tok/s), 128 generated in 943 ms (135.7 tok/s), drafts accepted 57 of 87, 2 checkpoints
+21:51:58 === tier telemetry (this run) ===
+strata serve: adaptive tier: round 61 swapped 3 (total 1954), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: expert tiers this round: routes fixed 51.0%, adaptive 47.7%, CPU miss 1.2%
+strata serve: adaptive tier: round 62 swapped 64 (total 2018), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: expert tiers this round: routes fixed 43.2%, adaptive 46.8%, CPU miss 10.0%
+strata serve: adaptive tier: round 63 swapped 64 (total 2082), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: expert tiers this round: routes fixed 39.1%, adaptive 49.5%, CPU miss 11.4%
+21:52:00 engine stopped, VRAM used=34 MiB
+NInfer-kaushikvira-swift15
+21:52:01 swift15 started (explicit)
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+21:55:03 dead-man cancelled; Option B window closed

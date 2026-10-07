@@ -331,9 +331,20 @@ A/B 的 3.1 GiB 峰值低于 8 GiB 安全线，用户裁定立项方案 B（专�
 
 **根因与修复（2026-10-07 晚，t16 独立复现定因，无需停 LLM）**：
 - 取证窗口确认 L0 失败**可复现**（2/2 次 layer 6），驱动日志对注册/canary 全程静默（只有 shutdown 的 713 双重注销）。
-- `tools/repro/t16.cu`（reglog 几何解析 + 子集注册 + 引擎同款 canary 采样，与 swift15 共存，只 pin 前缀层）逐层定位：**64 KiB 零拷贝 HtoD 的源一旦跨两个相邻 Mapped 注册的边界，驱动拒 `invalid argument`；完全在单个 run 内则必过**。canary 的 k=0 采样点用 `floor4k(固定区尾)`，落在固定 run 的**最后一页**，64K 拷贝越进非固定 run → 失败（48-run 形状无 run 内边界，故从未触发；L0/L7/L9/L10 "通过"恰是边界 4K 对齐、k=0 落在非固定 run 起点的层）。fill 不受影响（逐专家 blob 拷贝，tier 序保证 blob 不跨边界，窗口里 11797/11797 全成）。
+- `tools/repro/t16.cu`（reglog 几何解析 + 子集注册 + 引擎同款 canary 采样，与 swift15 共存，只 pin 前缀层）逐层定位：**64 KiB 零拷贝 HtoD 的源一旦跨两个相邻 Mapped 注册的边界，驱动拒 `invalid argument`；完全在单个 run 内则必过**。canary 的 k=0 采样点用 `floor4k(固定区尾)`，落在固定 run 的**最后一页**，64K 拷贝越进非固定 run → 失败（48-run 形状无 run 内边界，故从未触发；L0/L7/L9/L10 "通过"恰是边界 4K 对齐、k=0 落在非固定 run 起点的层）。fill 同样受此约束（第二窗口 pair 5898 证实：源在规范序 experts.bin 里可跨边界）→ 见下节 bounce 修复。
 - 修复（3 处）：① canary k=0 采样改 `ceil4k`（非固定 run 真起点，`register_tier_runs` 同款对齐）；② `release_fixed_tier` 把固定 run 从 `alias_runs_` 摘除；③ 梯子/close 不再二次注销固定 run（消除 shutdown 的 713）。t16 验证：修后单层与 49-run 累计形状全部采样点通过。
 - **20:49 验证窗口失败（环境性）**：引擎 720 s 零日志（46.84 GiB pin 在 ~39 GiB 可用内存下爬 swap），pkill 后残留 4328 MiB 孤儿 VRAM，脚本硬拉 swift15 → LLM 起不来 → 用户重启机器。脚本已加固：kill -9 兜底 + VRAM 未释放时**不**拉容器（ABORT 提示手动清理）。引擎内 L0 验证待下一窗口。
+
+**第二窗口（21:42）：L0 通过，暴露 fill 跨区拷贝**：canary `L0: Mapped zero-copy` ✅（k=0 修复生效），但 fill 在 pair 5898（L9 第一个非固定专家）失败：`fill_slot_blocking: invalid argument`。同一约束的第二处触发点——blob 拷贝源跨固定/非固定注册边界时（L9 非固定区逻辑起点 4144460800 非 4K 对齐，前 2768 B 落在固定 run 注册范围内），零拷贝 HtoD 被拒（"fill 不受影响"的判断错误：tier 序保证的是 blob **落点**不跨边界，**源**在规范序 experts.bin 里可以跨）。
+
+**fill 修复（commit beb9deb，方案 A：staging bounce）**：`fill_slot_blocking`/`fill_slot_queued` 的 CUDA 路径在 `cudaErrorInvalidValue` 时经 pinned staging buffer 中转（CPU memcpy 无 DMA 区段约束），复用 HIP 路径既有的 `blocking_staging_`（改为共享、`open()` 预置 `blob_` 尺寸，fill 线程的懒 ensure 变 no-op 线程安全）。24576 中仅 ~48 个跨边界专家多付一次 2 MiB memcpy（~150 µs），其余走原零拷贝快路径；prefill 热路径（GPU 读 VRAM 槽）不受影响。
+
+**第三窗口（21:50–21:52，全部验收项通过）**：
+- `tier-ordered layout` + `96 tier runs`（0 拒）✅；**canary `L0: Mapped zero-copy`** ✅（L2 降级消除）；**`pre-filled 11797 of 11797 slots`** ✅（跨区 bounce 生效）；**`11.19 GiB handed back to the OS`** ✅。
+- 内存：峰值 MemAvailable **15.6 GiB**（32K 档后；空闲 18.4），高于 8 GiB 安全线 2 倍；未换页。
+- **32K prefill 4416.8–4506.2 tok/s**（A/B 基线 4468 的 99–101%；L2 时只有 2866–2902）；1K 684–748 tok/s；decode 112–136 tok/s。
+- `fixed evict attempts` 恒 0；无 released 告警；tier 遥测 fixed 39–51% / adaptive 47–50% / CPU miss 1.2–11.4%（自适应换血正常）。
+- 闭环干净退出：VRAM 34 MiB → swift15 显式拉起，8088 恢复。
 
 ## 10. 明确不做（后续单独立项）
 
