@@ -1,0 +1,70 @@
+Failed to stop llm-deadman.timer: Unit llm-deadman.timer not loaded.
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+Running timer as unit: llm-deadman.timer
+Will run service as unit: llm-deadman.service
+23:42:54 dead-man timer set (30 min)
+NInfer-kaushikvira-swift15
+23:42:54 swift15 stopped
+23:42:54 VRAM released (used=34 MiB)
+23:42:55 page cache dropped (59.7157 GiB)
+23:43:31 [arm1-6144] engine ready (ok=1, conversation-cache 6144 MiB, port 8090)
+=== memory: [arm1-6144] idle (23:43:31) ===
+MemAvailable:   17301948 kB
+SwapFree:        8387836 kB
+vram: 31849 MiB
+arm1-6144 r0 conv0: OK in 23.5s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 0}}
+arm1-6144 r0 conv1: OK in 47.4s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 0}}
+arm1-6144 r1 conv0: OK in 3.3s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 100047}}
+arm1-6144 r1 conv1: OK in 1.8s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 100047}}
+arm1-6144: 4/4 requests completed
+=== memory: [arm1-6144] post-workload (23:44:22) ===
+MemAvailable:   12122104 kB
+SwapFree:        8387836 kB
+vram: 31935 MiB
+23:44:22 === [arm1-6144] engine evidence (this arm) ===
+--- verify timeouts: 0
+--- engine restart events: 0
+strata generate: KV streaming: 131072 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata serve: 298 MiB of VRAM free with everything loaded
+strata serve: KV streaming: 80.78% of 160200 block reads hit VRAM, 124.0 MiB read from RAM
+strata serve: conversation cache: parked 100069 tokens in 1163.0 ms; parked=1 bytes=2355994136 evictions=0 snapshot_bytes=2355994136 reused_kv_bytes=0
+strata serve: KV streaming: 83.18% of 178716 block reads hit VRAM, 121.1 MiB read from RAM
+strata serve: conversation cache: parked 100068 tokens in 1120.4 ms; parked=2 bytes=4711933356 evictions=0 snapshot_bytes=2355939220 reused_kv_bytes=0
+strata serve: KV streaming: 90.88% of 363588 block reads hit VRAM, 133.6 MiB read from RAM
+strata serve: conversation cache: parked 100068 tokens in 1074.5 ms; parked=1 bytes=2355939220 evictions=0 snapshot_bytes=2355939220 reused_kv_bytes=0
+strata serve: KV streaming: 81.28% of 147888 block reads hit VRAM, 111.5 MiB read from RAM
+--- requests:
+23:44:24 engine stopped (VRAM 34 MiB)
+23:45:44 [arm2-3072] engine ready (ok=1, conversation-cache 3072 MiB, port 8090)
+=== memory: [arm2-3072] idle (23:45:44) ===
+MemAvailable:   18972148 kB
+SwapFree:        6652412 kB
+vram: 31849 MiB
+arm2-3072 r0 conv0: OK in 48.5s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 0}}
+arm2-3072 r0 conv1: OK in 24.4s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 0}}
+arm2-3072 r1 conv0: OK in 1.9s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 100047}}
+arm2-3072 r1 conv1: OK in 25.4s usage={'prompt_tokens': 100052, 'completion_tokens': 16, 'total_tokens': 100068, 'prompt_tokens_details': {'cached_tokens': 0}}
+arm2-3072: 4/4 requests completed
+=== memory: [arm2-3072] post-workload (23:46:58) ===
+MemAvailable:   15309732 kB
+SwapFree:        6743548 kB
+vram: 31935 MiB
+23:46:58 === [arm2-3072] engine evidence (this arm) ===
+--- verify timeouts: 0
+--- engine restart events: 0
+strata generate: KV streaming: 131072 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata serve: 298 MiB of VRAM free with everything loaded
+strata serve: KV streaming: 80.80% of 147876 block reads hit VRAM, 114.4 MiB read from RAM
+strata serve: conversation cache: parked 100067 tokens in 1189.3 ms; parked=1 bytes=2355933072 evictions=0 snapshot_bytes=2355933072 reused_kv_bytes=0
+strata serve: KV streaming: 80.96% of 160224 block reads hit VRAM, 122.9 MiB read from RAM
+strata serve: conversation cache: parked 100067 tokens in 1088.9 ms; parked=1 bytes=2355933072 evictions=1 snapshot_bytes=2355933072 reused_kv_bytes=0
+strata serve: KV streaming: 89.58% of 338916 block reads hit VRAM, 142.2 MiB read from RAM
+strata serve: conversation cache: parked 100068 tokens in 511.5 ms; parked=1 bytes=2355939220 evictions=1 snapshot_bytes=2355939220 reused_kv_bytes=0
+strata serve: KV streaming: 81.33% of 154044 block reads hit VRAM, 115.8 MiB read from RAM
+--- requests:
+23:47:01 engine stopped (VRAM 34 MiB)
+NInfer-kaushikvira-swift15
+23:47:01 swift15 started (explicit)
+23:47:15 8088 answering (HTTP 401)
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+23:47:15 dead-man cancelled; A' window closed

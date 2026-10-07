@@ -53,7 +53,7 @@ P0 基线 → P1 专家层切 mmap 文件后端 → P1.5 自适应层验证 → 
 - **收窄结论**：触发量是 **live KV 总量**（会话缓存 6144 MiB/4 slots 让 2–3 个 127K+ 会话同时 live，`parked=3 bytes=6.26 GB`，总 live ≫ 131K 常驻窗）→ 每请求 200–465 MiB KV 经 PCIe 流式 → GPU 饱和 → verify 图饿死。放大因素＝显存 **298 MiB free 贴地**（代码自注"贴地 paging → verify 自旋永不完成"警戒带）。
 - **反直觉点**：原版 20 s prefill 不报错，是因为原版 RAM/disk-bound、**GPU 有空闲**；"把 prefill 变快"本身制造了 verify 饿死的条件。KV 侧相对 P0 唯一改动只是 `--kv-resident 32K→131K`（方案 A，只止血单会话，131K 已是显存硬上限）。
 - **已交接**：`docs/HANDOFF-VERIFY-TIMEOUT-2026-10-07.md`（`4f24486`），请专家裁定：**B**（verify 饱和期让位/自适应 deadline）vs **A′**（压并发 live，配置止血）vs **C**（live-KV 封顶驱逐），外加 298 MiB free 是否本就是 bug、Xid 31 是否独立故障。
-- **A′ 对照未跑**：会话被中断——配置里 `--conversation-cache-mib` 已预置为 **3072**（6144→3072），工作负载脚本 `tools/repro/kv-multi-smoke.py` 已写好，未验证。
+- **A′ 对照（23:43 窗口，`tools/repro/aprime-win.sh`，结果 `tools/repro/aprime-results.txt`）：两臂均未触发，未构成复现**。工作负载＝2 个 ~100K 会话并行 ×2 轮（`kv-multi-smoke.py`）。arm1（6144，阳性对照）4/4 完成、0 超时、0 重启，流式仅 110–140 MiB/请求（真实故障时 207–465 MiB）；arm2（3072）同样 4/4 完成（付出了应有的代价：会话缓存 `evictions=1`，第二个大会话丢缓存→重 prefill 25.4 s）。结论：**"live 总量超窗"单条件不足以饿死 verify 图**，需要更强负载（更大会话 127K–163K / 更长生成 / 3 路并发）才能复现；A′ 仍未验证。
 
 ## 6. 当前机器与代码状态
 
@@ -91,7 +91,7 @@ P0 基线 → P1 专家层切 mmap 文件后端 → P1.5 自适应层验证 → 
 3. **长稳未测**：方案 B 三窗口均为分钟级；8 h/24 h soak（P4 计划里）未执行。残余风险＝低频问题（已释放页被重触、35.66 GiB pinned 在长时间内存压力下的行为）。
 
 **③ P2 级——运营遗留（成本低）：**
-1. 配置里 `--conversation-cache-mib 3072`（A′ 预置）未验证——下次起 strata 前必须判定：跑掉它，或改回 6144，不留歧义。
+1. 配置里 `--conversation-cache-mib 3072`（A′ 预置）未验证——下次起 strata 前必须判定：跑掉它，或改回 6144，不留歧义（首轮 A′ 窗口后配置已还原为 3072）。
 2. 未提交小修与未跟踪产物——归档即消。
 3. `--vram-reserve-mib 700` vs 实测 298 free（日志有 `reserve was lowered` 分支）：建议在 verify 修复里一并加"余量地板"（如 free < 512 MiB 时压缩缓存/告警），给"榨干显存"策略留一条自救余量。
 4. 固定区的运维语义：话题漂移后固定集失配（实测 fixed 路由份额 60%→37%、miss 1.5%→13%），靠重启换血——应写进 P5 使用文档（遥测扳机已有）。
@@ -109,7 +109,7 @@ P0 基线 → P1 专家层切 mmap 文件后端 → P1.5 自适应层验证 → 
 | P0 二进制 + 32K 同口径 prefill | 未测 | 补齐唯一的口径缺口；半个窗口 |
 | `--expert-cache-fixed` 30/50/70 三臂 | 未测 | 固定区大小的权衡曲线；一个窗口 |
 | 8 h soak（hot/cold/shift 三 workload） | 未测（P4 计划内） | 长稳；一个夜间窗口 |
-| A′ 对照（live 总量假设） | 已就位未跑 | 决定 verify 止血方案是否成立；一个短窗口 |
+| A′ 对照（live 总量假设） | 已跑（2×100K，两臂均未触发，未构成复现）；需更强负载复跑 | 决定 verify 止血方案是否成立；一个短窗口 |
 | P0 反事实（同工作负载） | 未测 | 判定改造是否引入/放大 verify 故障；诊断用 |
 | nsys prefill 时间线 / chunk 调优 / CPU sweep(12v24/CCD/大页) | 未测（专家建议已排队） | 后续性能方向 |
 
