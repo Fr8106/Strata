@@ -134,7 +134,7 @@ KV streaming: 90.62% of 1232400 block reads hit VRAM, 465.5 MiB read from RAM
 1. **第 3 臂完整复现生产故障**：`verify: timed out at layer 29; its GPU waits were released but the GPU did not finish within 5 s (#267)` + NVRM 中断风暴 + Xid 31——与 10-07 22:xx 实际使用故障同型。
 2. **A′（conv-cache 3072）被证伪**：不避免故障；且实测其代价（第二个大会话被 `evictions=1` 逐出 → 重 prefill 25.4 s）。
 3. **加大 KV 池（max-context 393216）也被证伪**：故障照发，且池子够大时引擎并发跑多请求 → verify 图直接被饿死报 #267。
-4. **§2.1 的机理需要修正（源码核实，见 §8.1）**：触发量**不是**"多会话同时 live"——`--batch 0` 下请求严格串行（server FIFO + 引擎单命令循环），任何时刻只有一个请求持有活跃 KV；会话缓存只管 parked（主机 RAM），不占 cell。真正相关的是**单条大 prompt 的 KV 流式读负载**：residency map 只有 131072/262144 cells，实测一条 100K prompt 就产生 ~677 MiB 的 PCIe KV 拷贝（5% block miss）——这是"磨"的直接来源；而"死"（#267）是 verify 的每步 20 s doorbell 握手被同一份 PCIe/显存压力拖爆。
+4. **§2.1 的机理需要修正（源码核实，见 §8.1；对照实验见 §8.2）**：触发量**不是**"多会话同时 live"——`--batch 0` 下请求严格串行；也**不是单条大 prompt**——§8.2 实测单条 160K 在两版上都正常。真正相关的是**前序请求留下的状态 + 现版特有的一条路径**（见 §8.2 的根因候选）。
 5. 引擎行为两态：**"磨"**（大 prompt 的 KV 流式拷贝 + 显存贴地 → 20×+ 慢，请求挂）或 **"死"**（verify 握手某步 >20 s → `ERR`+`return 1` → 引擎进程退出 → server 重启 → 在途请求全灭）。客户端的 HTTP 400 **就是 #267 错误经 server 映射的结果**（`serve/server.py:3185/3187`），不是参数错误。
 6. 复现材料：`tools/repro/aprime-results.txt`（本轮＝臂 3 的数值；臂 1/2 数值见上表）、`tools/repro/aprime-server-maxctx393.log`（#267 原文）、`strata-iq3_s.log` 00:25–00:29 段。
 
@@ -143,6 +143,23 @@ KV streaming: 90.62% of 1232400 block reads hit VRAM, 465.5 MiB read from RAM
 - **并发**：`serve/server.py:1678,2290` 每请求持进程级 FIFO；引擎 serve 循环一次取一条命令（`src/program/generate.cpp:6484-6492`）；`--batch 0` 时整段读 prompt（`:7164`），"chunk 边界让行"（BYIELD/YIELDED，`:7188-7215`）只存在于 `--batch > 0`。`--batch N` = N 个**启动时预 carve** 的 slot session，各带完整 `max_context`，放不下就整个关掉（`:3013-3031`）。
 - **KV 池**（`include/strata/kernels/kv_stream.hpp:1-20` 设计注释）：流式层的**权威 K/V 在 pinned host**（identity 布局），VRAM 是 `n_slots` 页的 **residency map**；每次 attention 前 `kv_stream_resolve` 对选中 block 做 CLOCK 淘汰 + PCIe 拷贝（`src/kernels/cuda/kv_stream.cu:82-158`）；写永远写 host 副本、resident 才写 slot。`--kv-resident` 只决定 VRAM 页数（钳 ≥20480，`layer.cpp:537,556`）；host pinned 副本是**全量**（随 `--max-context`，262144→3.09 GiB / 393216→4.64 GiB）。准入只看静态 `n + max_new + 8 > max_context`（`generate.cpp:6689-6692`），不看别的请求；conversation cache 是主机 RAM 预算，parked 不占 cell，内存不足时只是跳过 park。
 - **verify 窗口**（`src/core/verify.cpp`）：doorbell 握手——GPU 每层写 `seq`（`src/kernels/cuda/elementwise.cu:308-326`），host 自旋（`verify.cpp:1444-1479`）后跑 CPU expert pool、发 plan、抬 `flag`，GPU 在 `wait_flag_ge_kernel`（`src/kernels/cuda/verify_kernels.cu:496-499`）空转等。**每（层,组）步的 host 自旋上限是 20 s（`:1467`），不是 5 s**；错误串里的 5 s 是释放旗标后等 stream 排空（`release_gpu_waits(5000)`，`:1472/:1477`；drain 成功会说 "and the GPU finished"）。失败**不可恢复**：`released_=true` 后该 Verifier 拒绝一切后续窗口（`:1396,:1900`），调用方 `ERR`+`return 1`（`generate.cpp:7431-7432`）→ 引擎进程退出 → server `EngineDied` + 重启（`serve/server.py:595`，`RESTART_RETRY_S=15`）。verify 流全是 `cudaStreamNonBlocking`，与主解码流**无优先级、无事件绑定**（`:476-484`）；饱和期没有超时自适应或降级。
+
+### 8.2 2026-10-08 对照实测：**故障是现版引入的回归**；根因候选＝verify 的 DMA 上传路径
+
+**实验**（`tools/repro/p0-160k-win.sh`、`tools/repro/seq-160k-win.sh`；结果 `p0-160k-results.txt`、`seq-160k-results.txt`；全新引擎、单条/两条序贯、`CONC=1`）：
+
+| 场景 | P0 原版（pre-p2 binary + p0 配置，kv-resident 32768）| 现版（P4-B，kv-resident 131072）|
+|---|---|---|
+| 单条 160K | **OK 33.9 s**（prefill 30374 ms = 5269 tok/s，decode 171.5 tok/s）| OK 40.2 s（36100 ms = 4434 tok/s，146.0 tok/s）|
+| 单条 130K | — | OK 32.5 s（28678 ms = 4534.9 tok/s）|
+| **100K → 160K 序贯** | **两条全 OK**（22.5 s + 34.8 s，0 超时）| **160K 在 63.2 s 报 `verify: timed out at layer 42 (#267)`** |
+
+- **单条大 prompt 不是触发条件**（两版都跑得动；P0 靠 1.5 GiB KV 流式、89.35% 命中吸收）。同一序列 P0 无恙、现版必死 → **回归是现版引入的**（可 63 秒复现）。
+- 现版同口径更慢：160K prefill 4434 vs P0 5269 tok/s（−16%），decode 146 vs 171.5；代价来自专家缓存 11199 vs 11751 槽 + 固定区/借槽封顶；内存收益同时确认（请求后 MemAvailable 17.6 vs 5.5 GiB）。
+
+**根因候选（代码定位）**：`Verifier::fetch_dma`（`src/core/verify.cpp:1621-1630`，注册为 `sink_.fetch`，`verify.cpp:400`）——verify 窗口的 PCIe 份额用 `cudaMemcpyAsync` 从 **arena 专家 blob** 直接 DMA 到 staging，**在 side stream 上异步执行、返回值不检查**；同文件注释写明"the graph waits for it before the PCIe groups"。tier 有序 arena 每层有**两个相邻 Mapped 注册**（固定块/非固定块，边界非 4K 对齐）→ 跨边界的 blob 源被驱动拒收（`invalid argument`，t16 已证实）→ flag B 不落 → verify 图空转 → host 20 s → #267。fill 与 canary 两处同源问题已修（bounce / ceil4k），**这一处没有**；P0 是整块注册、无内部边界 → 永不触发。层号随机、时好时坏 = 看该窗口选中的专家集是否含跨边界 blob。
+
+**下一步**：① t16 式独立程序复现**异步**变体（side stream + 不检查返回值的跨注册拷贝，不需 LLM 窗口）；② `fetch_dma` 加同款 bounce（只影响每层 ~1 个跨界 blob）+ 拷贝失败可见化；③ 复跑 `100K→160K` 验收。
 
 **对修复方向的含意（10-08 按源码修正）**：
 - **B（verify 饱和期让位/自适应 deadline）**能消除"死"这一支，不解决"磨"。

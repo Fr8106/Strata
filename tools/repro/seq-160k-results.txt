@@ -1,0 +1,68 @@
+NInfer-kaushikvira-swift15
+01:01:42 swift15 stopped (if it was up)
+01:01:42 VRAM released (used=34 MiB)
+01:01:45 page cache dropped (60.1967 GiB)
+01:01:45 [fresh130] exe=/home/ai/Strata/engine/strata sizes=130000
+01:02:25 [fresh130] engine ready
+fresh130 r0 conv0: OK in 32.5s usage={'prompt_tokens': 130052, 'completion_tokens': 512, 'total_tokens': 130564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fresh130: 1/1 requests completed
+01:02:58 === [fresh130] engine evidence (this arm) ===
+--- verify timeouts: 0
+strata generate: KV streaming: 131072 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache 11199 slots, 21.22 GiB of VRAM; policy is
+strata serve: 298 MiB of VRAM free with everything loaded
+strata serve: prompt 130052 tokens = 0 reused + 130052 read in 28678 ms (4534.9 tok/s), 512 generated in 3422 ms (149.6 tok/s), drafts accepted 335 of 398, 6 checkpoints
+strata serve: KV streaming: 94.52% of 3573972 block reads hit VRAM, 788.3 MiB read from RAM
+=== memory: [fresh130] post (01:02:58) ===
+MemAvailable:   16824824 kB
+SwapFree:        7454972 kB
+vram: 31945 MiB
+01:03:00 engine stopped (VRAM 34 MiB)
+01:03:00 [after100-160] exe=/home/ai/Strata/engine/strata sizes=100000,160000
+01:04:00 [after100-160] engine ready
+after100-160 r0 conv0: OK in 26.2s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+after100-160 r0 conv1: HTTP 400 after 63.2s: {"error": {"type": "invalid_request_error", "message": "verify: timed out at layer 42; its GPU waits were released but the GPU did not finish within 5 s (#267)"
+after100-160: 2/2 requests completed
+01:05:30 === [after100-160] engine evidence (this arm) ===
+--- verify timeouts: 0
+strata generate: KV streaming: 131072 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache 11199 slots, 21.22 GiB of VRAM; policy is
+strata serve: 298 MiB of VRAM free with everything loaded
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 22776 ms (4392.8 tok/s), 512 generated in 2984 ms (171.6 tok/s), drafts accepted 395 of 414, 6 checkpoints
+strata serve: KV streaming: 95.00% of 3327468 block reads hit VRAM, 670.8 MiB read from RAM
+strata serve: conversation cache: parked 100568 tokens in 1188.8 ms; parked=1 bytes=2363573220 evictions=0 snapshot_bytes=2363573220 reused_kv_bytes=0
+=== memory: [after100-160] post (01:05:30) ===
+MemAvailable:   15665080 kB
+SwapFree:        6726652 kB
+vram: 32073 MiB
+01:05:36 engine stopped (VRAM 34 MiB)
+01:05:36 [p0-after100-160] exe=/home/ai/Strata/engine/strata.pre-p2 sizes=100000,160000
+01:05:38 [p0-after100-160] server died early
+01:05:38 [p0-after100-160] engine NOT ready - skipping
+01:05:38 engine stopped (VRAM 34 MiB)
+01:05:38 window closed; swift15 left stopped (user: no restore within 8h)
+NInfer-kaushikvira-swift15
+01:08:54 swift15 stopped (if it was up)
+01:08:54 VRAM released (used=34 MiB)
+01:08:57 page cache dropped (60.3493 GiB)
+01:08:57 [p0-after100-160] exe=/home/ai/Strata/engine/strata.pre-p2 sizes=100000,160000
+01:09:29 [p0-after100-160] engine ready
+p0-after100-160 r0 conv0: OK in 22.5s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+p0-after100-160 r0 conv1: OK in 34.8s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+p0-after100-160: 2/2 requests completed
+01:10:26 === [p0-after100-160] engine evidence (this arm) ===
+--- verify timeouts: 0
+strata generate: KV streaming: 32768 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache 11751 slots, 22.29 GiB of VRAM; policy is
+strata serve: 394 MiB of VRAM free with everything loaded
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 19109 ms (5235.9 tok/s), 512 generated in 3025 ms (169.2 tok/s), drafts accepted 329 of 379, 6 checkpoints
+strata serve: KV streaming: 91.63% of 3500004 block reads hit VRAM, 1179.7 MiB read from RAM
+strata serve: conversation cache: parked 100565 tokens in 1204.4 ms; parked=1 bytes=2363567064 evictions=0 snapshot_bytes=2363567064 reused_kv_bytes=0
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 31449 ms (5089.2 tok/s), 512 generated in 2829 ms (181.0 tok/s), drafts accepted 299 of 429, 6 checkpoints
+strata serve: KV streaming: 90.07% of 3986784 block reads hit VRAM, 1594.1 MiB read from RAM
+=== memory: [p0-after100-160] post (01:10:26) ===
+MemAvailable:    3481952 kB
+SwapFree:        7399676 kB
+vram: 31839 MiB
+01:10:29 engine stopped (VRAM 34 MiB)
+01:10:30 window closed; swift15 left stopped (user: no restore within 8h)

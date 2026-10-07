@@ -56,6 +56,7 @@ P0 基线 → P1 专家层切 mmap 文件后端 → P1.5 自适应层验证 → 
 - **脚本化复现已达成（10-08 00:09–00:29，三臂，`tools/repro/aprime-win.sh` + `kv-multi-smoke.py`，结果 `aprime-results.txt`）**：负载＝3 个大会话并发（160K/130K/100K，max_tokens 512）。
   - **臂 3（max-context 393216）完整复现生产故障**：`verify: timed out at layer 29 … (#267)`（客户端看到的是 HTTP 400，body 即 #267 原文）+ NVRM 中断风暴 + Xid 31；160K 请求卡死（240 s 超时）。
   - **两处缓解被证伪**：A′（conv-cache 3072）与加大 KV 池（max-context 393216）都不避免故障；臂 1（262144/6144）同样出现 130K 请求 @83 s 的 400（同型）。
+- **10-08 深夜对照实测（决定性，细节见 HANDOFF §8.2）：故障是现版引入的回归**。P0 原版（pre-p2 binary + kv-resident 32768）单条 160K **OK**（33.9 s / 5269 tok/s），`100K→160K` 序贯**两条全 OK**；现版单条 160K/130K 也 OK（40.2 s / 32.5 s），但同一序贯序列 160K 在 63.2 s 报 `verify: timed out at layer 42 (#267)`。**根因候选**：`Verifier::fetch_dma`（`src/core/verify.cpp:1621-1630`）把 verify 窗口的 PCIe 份额从 arena 专家 blob 直接 `cudaMemcpyAsync` 到 staging，**异步、返回值不检查**；tier 有序 arena 的固定/非固定注册边界非 4K 对齐 → 跨界 blob 被驱动拒收（t16 已证实）→ flag B 不落 → 20 s → #267。fill/canary 同源问题已修，**此处未修**。单条大 prompt 与 KV 流式均已被证伪为触发条件。
   - 机理修正（源码核实，见§5 与 HANDOFF §8.1）：`--batch 0` 下请求**严格串行**（server FIFO + 引擎单命令循环），不存在"并发 live KV"；触发量是**单条大 prompt 的 KV 流式读负载**（residency map 131072/262144 cells；实测一条 100K prompt ≈677 MiB PCIe KV 拷贝）+ **显存贴地（298 MiB）**。引擎二态——大 prompt 流式 → "磨"（20×+ 慢、请求挂）；verify 每步 20 s 的 doorbell 握手被拖爆 → "死"（引擎退出+重启，在途请求全灭）。
 
 ## 6. 当前机器与代码状态
