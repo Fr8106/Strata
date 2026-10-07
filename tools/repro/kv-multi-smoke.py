@@ -31,6 +31,7 @@ PORT   = int(sys.argv[3]) if len(sys.argv) > 3 else 8088
 MAXTOK = int(sys.argv[4]) if len(sys.argv) > 4 else 16
 LABEL  = sys.argv[5] if len(sys.argv) > 5 else "workload"
 TIMEOUT = int(os.environ.get("TIMEOUT", "900"))
+CONC    = int(os.environ.get("CONC", "0")) or len(SIZES)   # CONC=1 sends the conversations strictly in order
 N      = len(SIZES)
 BASE   = f"http://127.0.0.1:{PORT}"
 MODEL  = json.load(open("/home/ai/Strata/strata-iq3_s.json"))["model_name"]
@@ -68,7 +69,7 @@ def ask(conv, rnd):
 
 lines = []
 for rnd in range(ROUNDS):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=N) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(CONC, N)) as ex:
         lines += list(ex.map(lambda i: ask(i, rnd), range(N)))
     for l in lines[-N:]:
         print(l, flush=True)

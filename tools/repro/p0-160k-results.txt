@@ -1,0 +1,50 @@
+NInfer-kaushikvira-swift15
+00:57:47 swift15 stopped (if it was up)
+00:57:47 VRAM released (used=34 MiB)
+00:57:49 page cache dropped (59.9439 GiB)
+00:57:49 [p0] exe=/home/ai/Strata/engine/strata.pre-p2 kv-resident=32768
+00:58:21 [p0] engine ready
+=== memory: [p0] idle (00:58:21) ===
+MemAvailable:    6460672 kB
+SwapFree:        7842812 kB
+vram: 31753 MiB
+p0 r0 conv0: OK in 33.9s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+p0: 1/1 requests completed
+=== memory: [p0] post-request (00:58:55) ===
+MemAvailable:    5477528 kB
+SwapFree:        7842812 kB
+vram: 31839 MiB
+00:58:55 === [p0] engine evidence (this arm) ===
+--- verify timeouts: 0
+strata generate: KV streaming: 32768 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache 11751 slots, 22.29 GiB of VRAM; policy is
+strata generate: pre-filled 11751 of 11751 slots from the profile; slot 0 verified
+strata serve: 394 MiB of VRAM free with everything loaded
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 30374 ms (5269.4 tok/s), 512 generated in 2985 ms (171.5 tok/s), drafts accepted 335 of 386, 6 checkpoints
+strata serve: KV streaming: 89.35% of 3493836 block reads hit VRAM, 1498.6 MiB read from RAM
+00:58:57 engine stopped (VRAM 34 MiB)
+00:58:57 [p4b] exe=/home/ai/Strata/engine/strata kv-resident=131072
+00:59:46 [p4b] engine ready
+=== memory: [p4b] idle (00:59:46) ===
+MemAvailable:   18803612 kB
+SwapFree:        6648060 kB
+vram: 31849 MiB
+p4b r0 conv0: OK in 40.2s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+p4b: 1/1 requests completed
+=== memory: [p4b] post-request (01:00:26) ===
+MemAvailable:   17630100 kB
+SwapFree:        6667004 kB
+vram: 31951 MiB
+01:00:26 === [p4b] engine evidence (this arm) ===
+--- verify timeouts: 0
+strata generate: KV streaming: 131072 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata generate: expert cache 11199 slots, 21.22 GiB of VRAM; policy is
+strata generate: pre-filled 11199 of 11199 slots from the profile; slot 0 verified
+strata generate: fixed tier: 5599 of 11199 slots (10.63 GiB of profile-hottest experts, never swapped); adaptive tier: slots 5599..11198 (10.60 GiB)
+strata generate: expert arena: 10.63 GiB of VRAM-held experts handed back to the OS
+strata generate: fixed tier: the prompt loan is capped at 5600 of 11199 slots so its tail cannot reach the fixed head
+strata serve: 298 MiB of VRAM free with everything loaded
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 36100 ms (4433.6 tok/s), 512 generated in 3506 ms (146.0 tok/s), drafts accepted 326 of 413, 6 checkpoints
+strata serve: KV streaming: 94.17% of 3728064 block reads hit VRAM, 875.6 MiB read from RAM
+01:00:28 engine stopped (VRAM 34 MiB)
+01:00:28 window closed; swift15 left stopped (user: no restore within 8h)
