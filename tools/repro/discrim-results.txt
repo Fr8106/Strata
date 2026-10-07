@@ -1,0 +1,31 @@
+NInfer-kaushikvira-swift15
+01:26:58 VRAM released (used=34 MiB)
+01:27:01 [fixed0] edit=fixed0 -> 131072
+01:27:33 [fixed0] engine ready
+strata generate: expert cache 11152 slots, 21.13 GiB of VRAM; policy is
+strata generate: pre-filled 11152 of 11152 slots from the profile; slot 0 verified
+strata serve: 392 MiB of VRAM free with everything loaded
+fixed0 r0 conv0: OK in 23.4s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0 r0 conv1: OK in 35.8s usage={'prompt_tokens': 160053, 'completion_tokens': 512, 'total_tokens': 160565, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0: 2/2 requests completed
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 19753 ms (5065.1 tok/s), 512 generated in 3266 ms (156.8 tok/s), drafts accepted 347 of 383, 6 checkpoints
+strata serve: prompt 160053 tokens = 0 reused + 160053 read in 32217 ms (4968.0 tok/s), 512 generated in 3065 ms (167.1 tok/s), drafts accepted 291 of 417, 6 checkpoints
+01:28:35 engine stopped (VRAM 34 MiB)
+01:28:35 [kvres32] edit=kvres32 -> 32768
+01:29:22 [kvres32] engine ready
+strata generate: expert arena: tier-ordered layout (24576 profiled experts lead each layer; the fixed tier is released after the profile fill)
+strata generate: expert cache 11797 slots, 22.39 GiB of VRAM; policy is
+strata generate: expert arena: PCIe alias registered over 46.84 GiB in 96 tier runs; the fixed tier's 5898 experts are released (unregister + DONTNEED) after the profile fill
+strata generate: PCIe alias canary passed (L0: Mapped zero-copy)
+strata generate: pre-filled 11797 of 11797 slots from the profile; slot 0 verified
+strata generate: fixed tier: 5898 of 11797 slots (11.19 GiB of profile-hottest experts, never swapped); adaptive tier: slots 5898..11796 (11.19 GiB)
+strata generate: expert arena: 11.19 GiB of VRAM-held experts handed back to the OS
+strata generate: fixed tier: the prompt loan is capped at 5899 of 11797 slots so its tail cannot reach the fixed head
+strata serve: 300 MiB of VRAM free with everything loaded
+kvres32 r0 conv0: OK in 26.2s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+kvres32 r0 conv1: OK in 39.5s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+kvres32: 2/2 requests completed
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 22689 ms (4409.7 tok/s), 512 generated in 3144 ms (162.8 tok/s), drafts accepted 357 of 396, 6 checkpoints
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 36316 ms (4407.2 tok/s), 512 generated in 2580 ms (198.5 tok/s), drafts accepted 332 of 388, 6 checkpoints
+01:30:31 engine stopped (VRAM 34 MiB)
+01:30:31 window closed; swift15 left stopped

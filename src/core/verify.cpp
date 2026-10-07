@@ -1624,7 +1624,18 @@ void Verifier::fetch_dma(void* ctx, const uint8_t* const* src, int n, size_t byt
     if (n <= 0) { raise_flag(v->h_flagB_, want); return; }
     v->copy_used_ = true;
     uint8_t* stage = (uint8_t*) v->sink_.staging;                  // this group's half in a split window
-    for (int i = 0; i < n; ++i) cudaMemcpyAsync(stage + (size_t) i * bytes, src[i], bytes, cudaMemcpyHostToDevice, v->copy_);
+    for (int i = 0; i < n; ++i) {
+        const cudaError_t rc = cudaMemcpyAsync(stage + (size_t) i * bytes, src[i], bytes,
+                                               cudaMemcpyHostToDevice, v->copy_);
+        if (rc != cudaSuccess) {
+            // An unchecked failure here leaves the staging stale while the graph waits on flag B, and the
+            // request dies far away as "verify: timed out ... (#267)" (the 2026-10-08 regression).  Report
+            // it where it happens and clear the sticky error so the rest of this batch is still attempted.
+            std::fprintf(stderr, "strata verify: the PCIe share copy %d/%d failed: %s (src=%p bytes=%zu)\n",
+                         i + 1, n, cudaGetErrorString(rc), (const void*) src[i], bytes);
+            (void) cudaGetLastError();
+        }
+    }
     FlagSet& fs = v->flag_sets_[v->cur_layer_ % (sizeof v->flag_sets_ / sizeof v->flag_sets_[0])];
     fs.flag = v->h_flagB_;
     fs.value = want;

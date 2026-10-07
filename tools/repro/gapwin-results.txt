@@ -1,0 +1,48 @@
+NInfer-kaushikvira-swift15
+01:36:50 VRAM released (used=34 MiB)
+01:37:41 engine ready (ok=1)
+01:37:41 === startup invariants (this run) ===
+strata generate: expert arena: tier-ordered layout (24576 profiled experts lead each layer; the fixed tier is released after the profile fill)
+strata generate: expert cache 11199 slots, 21.22 GiB of VRAM; policy is
+strata generate: expert arena: PCIe alias registered over 46.84 GiB in 96 tier runs; the fixed tier's 5599 experts are released (unregister + DONTNEED) after the profile fill
+strata generate: PCIe alias canary passed (L0: Mapped zero-copy)
+strata generate: pre-filled 11199 of 11199 slots from the profile; slot 0 verified
+strata generate: fixed tier: 5599 of 11199 slots (10.63 GiB of profile-hottest experts, never swapped); adaptive tier: slots 5599..11198 (10.60 GiB)
+strata generate: expert arena: 10.63 GiB of VRAM-held experts handed back to the OS
+strata generate: fixed tier: the prompt loan is capped at 5600 of 11199 slots so its tail cannot reach the fixed head
+strata serve: 298 MiB of VRAM free with everything loaded
+gap-r1 r0 conv0: OK in 26.3s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+gap-r1 r0 conv1: OK in 40.1s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+gap-r1: 2/2 requests completed
+gap-r2 r0 conv0: OK in 27.4s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+gap-r2 r0 conv1: OK in 39.9s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+gap-r2: 2/2 requests completed
+gap-r3 r0 conv0: OK in 26.9s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+gap-r3 r0 conv1: OK in 39.2s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+gap-r3: 2/2 requests completed
+01:41:01 === request evidence (this run) ===
+--- verify timeouts: 0
+--- PCIe share copy failures: 0
+strata generate: KV streaming: 131072 of 262144 cells per QSA layer in VRAM, the K/V in 3.09 GiB of pinned RAM
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 22797 ms (4388.8 tok/s), 512 generated in 3117 ms (164.3 tok/s), drafts accepted 345 of 378, 6 checkpoints
+strata serve: KV streaming: 95.07% of 3395232 block reads hit VRAM, 674.6 MiB read from RAM
+strata serve: conversation cache: parked 100565 tokens in 1203.4 ms; parked=1 bytes=2363567064 evictions=0 snapshot_bytes=2363567064 reused_kv_bytes=0
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 37119 ms (4311.9 tok/s), 512 generated in 2424 ms (211.2 tok/s), drafts accepted 349 of 412, 6 checkpoints
+strata serve: KV streaming: 93.96% of 3592368 block reads hit VRAM, 873.4 MiB read from RAM
+strata serve: conversation cache: parked 160567 tokens in 1624.5 ms; parked=2 bytes=5644241480 evictions=0 snapshot_bytes=3280674416 reused_kv_bytes=0
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 24268 ms (4122.9 tok/s), 512 generated in 2749 ms (186.2 tok/s), drafts accepted 321 of 396, 6 checkpoints
+strata serve: KV streaming: 95.68% of 3654036 block reads hit VRAM, 636.4 MiB read from RAM
+strata serve: conversation cache: parked 100565 tokens in 1088.6 ms; parked=2 bytes=5644241480 evictions=1 snapshot_bytes=2363567064 reused_kv_bytes=0
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 37169 ms (4306.1 tok/s), 512 generated in 2213 ms (231.3 tok/s), drafts accepted 356 of 411, 6 checkpoints
+strata serve: KV streaming: 93.74% of 3524652 block reads hit VRAM, 888.6 MiB read from RAM
+strata serve: conversation cache: parked 160564 tokens in 1514.4 ms; parked=2 bytes=5644186556 evictions=2 snapshot_bytes=3280619492 reused_kv_bytes=0
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 24269 ms (4122.7 tok/s), 512 generated in 2314 ms (221.2 tok/s), drafts accepted 353 of 408, 6 checkpoints
+strata serve: KV streaming: 95.33% of 3543180 block reads hit VRAM, 666.9 MiB read from RAM
+strata serve: conversation cache: parked 100567 tokens in 499.7 ms; parked=2 bytes=5644186564 evictions=3 snapshot_bytes=2363567072 reused_kv_bytes=0
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 36401 ms (4396.9 tok/s), 512 generated in 2271 ms (225.5 tok/s), drafts accepted 350 of 403, 6 checkpoints
+strata serve: KV streaming: 93.70% of 3512292 block reads hit VRAM, 890.7 MiB read from RAM
+=== memory after (idle) ===
+MemAvailable:   11386680 kB
+SwapFree:        7359228 kB
+vram: 31953 MiB
+01:41:03 engine stopped (VRAM 34 MiB); swift15 left stopped

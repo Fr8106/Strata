@@ -3111,9 +3111,20 @@ ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flag
             // registration builds (a plain pin helps cudaMemcpy only).  96 tier runs (2 x 48 layers) leave the
             // driver's region budget plenty of headroom, like the 48 whole-layer runs before them.
             const uint64_t fs = off & ~(uint64_t) 4095;
-            const uint64_t fe = (off + nfix + 4095) & ~(uint64_t) 4095;
+            // Stop at floor4k, not ceil4k: the tier boundary is rarely a multiple of 4096, and registering
+            // the fixed run up to ceil4k makes it SHARE a page with the non-fixed run - a cudaMemcpy(Async)
+            // whose source straddles two adjacent Mapped registrations is refused by the driver (invalid
+            // argument; t16 for the sync copy, t17 for the async one).  The fill bounced around it;
+            // Verifier::fetch_dma's unchecked async copies did not, so a refused expert left flag B stuck
+            // and the verify graph spun into #267 (2026-10-08).  The shared page stays UNREGISTERED: any
+            // copy crossing the boundary then runs registered|pageable|registered, which the driver accepts
+            // (t17 case C).  Cost: <= 4 KiB per layer whose pages read through HMM instead of zero-copy.
+            const uint64_t fe = (off + nfix) & ~(uint64_t) 4095;
             void* d = nullptr;
-            const cudaError_t rc = cudaHostRegister((void*) (base_ + fs), (size_t) (fe - fs), flags);
+            // fs >= fe only for a fixed block smaller than one page: no alias, the fill's bounce covers it
+            const cudaError_t rc = fs < fe
+                ? cudaHostRegister((void*) (base_ + fs), (size_t) (fe - fs), flags)
+                : cudaErrorInvalidValue;
             pcie_reg_log(off, base_ + fs, (size_t) (fe - fs), flags, (int) rc);
             if (rc == cudaSuccess &&
                 cudaHostGetDevicePointer(&d, (void*) (base_ + fs), 0) == cudaSuccess && d != nullptr) {
@@ -3142,7 +3153,13 @@ ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flag
                 alias_runs_.push_back(ns);
                 for (int64_t e = 0; e < n_expert_; ++e) {
                     const uint64_t bo = lay.blob_offset(l, e);
-                    if (bo >= off + nfix && bo < end)
+                    // Only a blob WHOLLY inside the registered run gets an alias.  The tier boundary is not a
+                    // 4K multiple, so the first non-fixed blob starts before the run (the shared/gap page):
+                    // handing out an alias for it points the GPU at a range outside the mapping, and after the
+                    // fixed tier is released that page has no device mapping at all - reads of it stall the
+                    // layer and the verify window dies as #267 (2026-10-08).  Those <=1 expert per layer go
+                    // through the CPU path instead (pinned() reports false), which is exact, just slower.
+                    if (bo >= ns && bo < end)
                         blob_dev_[(size_t) l * n_expert_ + (size_t) e] =
                             (const uint8_t*) d + (bo - ns);
                 }

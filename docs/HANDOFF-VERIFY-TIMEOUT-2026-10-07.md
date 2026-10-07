@@ -157,9 +157,14 @@ KV streaming: 90.62% of 1232400 block reads hit VRAM, 465.5 MiB read from RAM
 - **单条大 prompt 不是触发条件**（两版都跑得动；P0 靠 1.5 GiB KV 流式、89.35% 命中吸收）。同一序列 P0 无恙、现版必死 → **回归是现版引入的**（可 63 秒复现）。
 - 现版同口径更慢：160K prefill 4434 vs P0 5269 tok/s（−16%），decode 146 vs 171.5；代价来自专家缓存 11199 vs 11751 槽 + 固定区/借槽封顶；内存收益同时确认（请求后 MemAvailable 17.6 vs 5.5 GiB）。
 
-**根因候选（代码定位）**：`Verifier::fetch_dma`（`src/core/verify.cpp:1621-1630`，注册为 `sink_.fetch`，`verify.cpp:400`）——verify 窗口的 PCIe 份额用 `cudaMemcpyAsync` 从 **arena 专家 blob** 直接 DMA 到 staging，**在 side stream 上异步执行、返回值不检查**；同文件注释写明"the graph waits for it before the PCIe groups"。tier 有序 arena 每层有**两个相邻 Mapped 注册**（固定块/非固定块，边界非 4K 对齐）→ 跨边界的 blob 源被驱动拒收（`invalid argument`，t16 已证实）→ flag B 不落 → verify 图空转 → host 20 s → #267。fill 与 canary 两处同源问题已修（bounce / ceil4k），**这一处没有**；P0 是整块注册、无内部边界 → 永不触发。层号随机、时好时坏 = 看该窗口选中的专家集是否含跨边界 blob。
+**根因（已确认并修复）＝ 边界 blob 的别名指针**。tier 有序 arena 的非固定 run 起点 `ns = ceil4k(off+nfix)` **大于**该层第一个非固定 blob 的起点（边界非 4K 对齐），但代码仍给该 blob 发别名 `blob_dev_ = d + (bo - ns)`——**负偏移**，指到注册区之外的共享页；`pcie_frac` 的 GPU 直读路径解引用它 → 落在映射外的地址 → 该层内核停住（dmesg `Xid 31 MMU Fault … FAULT_PTE ACCESS_TYPE_VIRT_READ`）→ verify doorbell 20 s → #267。与全部观察吻合：只在现版（P0 整块注册、无内部边界）出现；只在该 blob 被选为 GPU PCIe 份额时触发（层号随机 4/42、时好时坏）；更大的固定区（kv-resident 32768 → 固定 5898 席）把边界专家收进固定区、无需别名读，所以避开了。
 
-**下一步**：① t16 式独立程序复现**异步**变体（side stream + 不检查返回值的跨注册拷贝，不需 LLM 窗口）；② `fetch_dma` 加同款 bounce（只影响每层 ~1 个跨界 blob）+ 拷贝失败可见化；③ 复跑 `100K→160K` 验收。
+**修复（两处几何 + 一处守卫 + 一处可见化）**：
+1. 固定 run 终点从 `ceil4k(off+nfix)` 改 **`floor4k(off+nfix)`**——边界共享页保持**未注册**（跨该页的拷贝走 registered|pageable|registered，驱动接受：`t17.cu` case C）；
+2. **只给完全落在注册 run 内的 blob 发别名**（`bo >= ns`）——每层 ≤1 个边界专家改走 CPU 路径（`pinned()` 报 false），精确且代价可忽略；
+3. `fetch_dma` 的拷贝返回码检查 + 失败打点（此前静默）。
+
+**验证**（01:37–01:41，`tools/repro/gapwin.sh`，结果 `gapwin-results.txt`）：**`100K→160K` 三连全部通过 3/3**（160K 39.2–40.1 s，0 verify 超时、0 拷贝失败）；启动不变量全绿（tier layout、96 tier runs、canary L0、fill 11199/11199、10.63 GiB 归还）。对照：修复前同序列 **5/5 死**（layer 4/42，63–64 s）。**独立复现**：`tools/repro/t17.cu`（无需 LLM 窗口）——相邻注册 + 边界非对齐时，跨边界源的同步/异步 HtoD 拷贝都被驱动拒（`invalid argument`）；留 gap 页或经 pinned bounce 均通过。
 
 **对修复方向的含意（10-08 按源码修正）**：
 - **B（verify 饱和期让位/自适应 deadline）**能消除"死"这一支，不解决"磨"。

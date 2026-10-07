@@ -1,0 +1,9 @@
+NInfer-kaushikvira-swift15
+01:31:22 VRAM released (used=34 MiB)
+01:31:25 config: strata-iq3_s.json + STRATA_VERIFY_TRACE=1
+01:32:07 engine ready (ok=1)
+trace r0 conv0: OK in 26.4s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+trace r0 conv1: HTTP 400 after 64.2s: {"error": {"type": "invalid_request_error", "message": "verify: timed out at layer 4; its GPU waits were released but the GPU did not finish within 5 s (#267)"}
+trace: 2/2 requests completed
+01:33:38 === verify trace dump (server stderr) ===
+01:33:44 engine stopped (VRAM 34 MiB); swift15 left stopped
