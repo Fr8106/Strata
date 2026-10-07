@@ -1,0 +1,23 @@
+Failed to stop llm-deadman.timer: Unit llm-deadman.timer not loaded.
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+Running timer as unit: llm-deadman.timer
+Will run service as unit: llm-deadman.service
+19:26:34 dead-man timer set (25 min)
+NInfer-kaushikvira-swift15
+19:26:38 swift15 stopped
+19:26:38 VRAM released (used=34 MiB)
+19:26:38 deployed build/strata -> engine/strata
+19:26:38 server starting (pid 167683)
+19:28:14 server answering on :8090
+19:28:15 smoke request done (692 bytes)
+strata generate: expert arena: PCIe alias registered over 46.84 GiB in 48 per-layer runs; the fixed tier's 5898 experts stay pinned (per-layer runs can't release them under the driver's region cap)
+strata generate: PCIe alias canary passed (L0: Mapped zero-copy)
+strata generate: pre-filled 11797 of 11797 slots from the profile; slot 0 verified
+strata serve: usage seeded from the 24576-pair profile (rank 0 = 1.0, unprofiled = 0)
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1352 ms (777.8 tok/s), 8 generated in 105 ms (76.2 tok/s), drafts accepted 5 of 6, 1 checkpoints
+19:28:18 engine stopped, VRAM used=34 MiB
+NInfer-kaushikvira-swift15
+19:28:19 swift15 started (explicit)
+19:28:25 8088 healthy
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+19:28:25 dead-man cancelled; window closed

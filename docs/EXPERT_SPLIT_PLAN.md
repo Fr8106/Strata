@@ -287,7 +287,13 @@ strata generate: pre-filled 12045 of 12045 slots from the profile
 - 引擎内取证（fill 失败诊断块）：从已注册 run 内的 src 做 HtoD，**任何**大小（含 64 KiB）都报全新 `invalid argument`；CPU 读该页正常；dst 正常；把同一批字节 memcpy 到**全新** host buffer 再 HtoD 通过（bounce）；4 MiB 窗口 `cudaHostUnregister` 报 `invalid argument`、再注册报 `already mapped`。结论：驱动对 4628 段注册的 user-memory 记录在引擎上下文中坏掉了（CPU 可见、拷贝引擎不可用），字节与上下文本身都健康。
 - 复现形状（t15，引擎完整上下文：24 GiB cache + 512 小分配 + 流 + kernel + 9.14 GiB 预 pin + 26.8 GiB PLE 映射 + 256 MiB PCIe 探针）：**单段 46.84 GiB MAPPED（m1）、48 层 MAPPED（m48）、单段纯 pin（p1）全部注册 + 拷贝通过**。
 - **最终修复**（`register_pcie_alias`）：注册粒度从逐 blob run（4628 段，~8 MiB/段）降为**每层一段、共 48 段、整层 MAPPED**（`cudaHostRegisterPortable | cudaHostRegisterMapped`）。48 个 zero-copy 映射离驱动资源上限很远（t15 实测）；Mapped 是 GPU 直接经 PCIe 读专家所必需的 device 侧映射（纯 pin 只帮到 `cudaMemcpy`，不帮 kernel 直接解引用）。代价：固定区（~11.2 GiB）随整层一起 pin 住、会话内不归还——`release()`/`release_fixed_tier()` 对已注册 blob 是 no-op（对 pinned 页 DONTNEED 本就无效），遥测诚实报 0。
-- 待验证（需 GPU 空闲窗口；2026-10-07 下午窗口被 swift15 容器占显存，引擎 weight arena OOM 未跑到注册）：`PCIe alias registered over ~46.8 GiB in 48 per-layer runs` 且无 fill 失败 → 启动 strata.service、跑 A/B（§9.5 预期指标）。
+- ~~待验证（需 GPU 空闲窗口）~~ → **已验证（2026-10-07 19:26 窗口，`tools/repro/verify-win.sh` 闭环：dead-man → 停 swift15 → VRAM 预检 → 部署 → 8090 服务 → 冒烟 → 拉回）**：
+  - `PCIe alias registered over 46.84 GiB in 48 per-layer runs`（48 层 Mapped 注册引擎内通过，9ad8c44 的验证缺口关闭）；
+  - `PCIe alias canary passed (L0: Mapped zero-copy)`（阶段 0 的 canary+梯子首次实战通过）；
+  - `pre-filled 11797 of 11797 slots from the profile; slot 0 verified`（fill 通过；槽数 11797 = `--expert-cache auto` 按本次启动的显存水位定档，此前的 12641 是不同水位下的数字）；
+  - `usage seeded from the 24576-pair profile`（播种生效）；
+  - 冒烟请求端到端通：`prompt 1052 tokens = 0 reused + 1052 read in 1352 ms (777.8 tok/s), 8 generated (76.2 tok/s), drafts accepted 5 of 6`。**注意：777.8 tok/s 是冷启动首请求（且重复文本被 BPE 压到 1052 token），不是稳态 prefill 数**；稳态 A/B（预热 + 1K/8K/32K 三档多轮）待下一个窗口。
+  - 窗口全程 2 分钟（引擎启动 ~96 s），LLM 拉回后 8088 healthy。
 
 ## 10. 明确不做（后续单独立项）
 
