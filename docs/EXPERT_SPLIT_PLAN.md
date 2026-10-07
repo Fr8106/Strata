@@ -295,6 +295,19 @@ strata generate: pre-filled 12045 of 12045 slots from the profile
   - 冒烟请求端到端通：`prompt 1052 tokens = 0 reused + 1052 read in 1352 ms (777.8 tok/s), 8 generated (76.2 tok/s), drafts accepted 5 of 6`。**注意：777.8 tok/s 是冷启动首请求（且重复文本被 BPE 压到 1052 token），不是稳态 prefill 数**；稳态 A/B（预热 + 1K/8K/32K 三档多轮）待下一个窗口。
   - 窗口全程 2 分钟（引擎启动 ~96 s），LLM 拉回后 8088 healthy。
 
+**稳态 A/B（2026-10-07 19:33 窗口，`tools/repro/ab-win.sh`；3 轮预热 + 三档各 3 轮取中位数；随机词 prompt 防 BPE 坍缩）**：
+
+| 档（实测 token） | prefill 中位 | decode 中位 |
+|---|---|---|
+| 1K (1052) | 831 tok/s | 104–123 tok/s |
+| 8K (8052) | 3773 tok/s | 157–176 tok/s |
+| 32K (32052) | 4468 tok/s | 137–198 tok/s |
+
+- prefill 随 prompt 长度上升（chunk 摊薄 PCIe），32K 档 4468 tok/s = P0 基线 5.5–6k 的 ~85%，远高于 P1 mmap 的 ~3.1k；
+- **`fixed evict attempts` 恒 0**（不变量守住）；tier 份额 fixed 38–50% / adaptive 47–59% / **CPU miss 仅 2.6–3.0%**；
+- 内存：空闲 MemAvailable 6.2 GiB → **峰值 3.1 GiB**（32K 档后；SwapFree 不变、PSI full 0，**未换页**）；RSS 55–58 GiB、THP AnonHugePages 38 GiB；
+- **对照专家安全线（满载 MemAvailable ≥ 8 GiB）：低于线**，也低于交接文档预测的 4–6 GiB。处置选项：① 接受现状进实际使用（观察）；② `--conversation-cache-mib 6144 → 2048` 换回 ~4 GiB；③ 立项方案 B（tier 有序 arena，真归还 ~11 GiB）。
+
 ## 10. 明确不做（后续单独立项）
 
 - 100% 显存专家释放 RAM（自适应换入变磁盘读）

@@ -1,0 +1,66 @@
+Failed to stop llm-deadman.timer: Unit llm-deadman.timer not loaded.
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+Running timer as unit: llm-deadman.timer
+Will run service as unit: llm-deadman.service
+19:33:27 dead-man timer set (25 min)
+NInfer-kaushikvira-swift15
+19:33:30 swift15 stopped
+19:33:30 VRAM released (used=34 MiB)
+19:33:30 server starting (pid 171361)
+19:35:05 server answering on :8090
+=== memory: post-startup (idle) (19:35:15) ===
+MemAvailable:    6242976 kB
+Unevictable:       53404 kB
+SwapFree:        7735548 kB
+AnonHugePages:  38053888 kB
+some avg10=21.72 avg60=42.80 avg300=19.83 total=855559608
+vram: 31847 MiB
+VmPin:	       0 kB
+VmRSS:	54921984 kB
+req 00 warmup: 1.6s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 16, 'total_tokens': 1068, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 01 warmup: 1.4s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 16, 'total_tokens': 1068, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 02 warmup: 1.5s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 16, 'total_tokens': 1068, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 03 1K: 1.6s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 32, 'total_tokens': 1084, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 04 1K: 1.5s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 32, 'total_tokens': 1084, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 05 1K: 1.6s wall, usage={'prompt_tokens': 1052, 'completion_tokens': 32, 'total_tokens': 1084, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 06 8K: 2.4s wall, usage={'prompt_tokens': 8052, 'completion_tokens': 32, 'total_tokens': 8084, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 07 8K: 2.4s wall, usage={'prompt_tokens': 8052, 'completion_tokens': 32, 'total_tokens': 8084, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 08 8K: 2.3s wall, usage={'prompt_tokens': 8052, 'completion_tokens': 32, 'total_tokens': 8084, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 09 32K: 8.1s wall, usage={'prompt_tokens': 32052, 'completion_tokens': 128, 'total_tokens': 32180, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 10 32K: 8.0s wall, usage={'prompt_tokens': 32052, 'completion_tokens': 128, 'total_tokens': 32180, 'prompt_tokens_details': {'cached_tokens': 0}}
+req 11 32K: 8.1s wall, usage={'prompt_tokens': 32052, 'completion_tokens': 128, 'total_tokens': 32180, 'prompt_tokens_details': {'cached_tokens': 0}}
+=== memory: post-32K-tier (peak) (19:35:55) ===
+MemAvailable:    3271176 kB
+Unevictable:       53404 kB
+SwapFree:        7736828 kB
+AnonHugePages:  38053888 kB
+some avg10=0.32 avg60=21.28 avg300=17.16 total=855564867
+vram: 31951 MiB
+VmPin:	       0 kB
+VmRSS:	57922796 kB
+19:35:55 === engine per-request lines (this run) ===
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1319 ms (797.3 tok/s), 16 generated in 237 ms (67.6 tok/s), drafts accepted 10 of 14, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1294 ms (812.8 tok/s), 16 generated in 147 ms (108.5 tok/s), drafts accepted 10 of 12, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1280 ms (822.2 tok/s), 16 generated in 177 ms (90.2 tok/s), drafts accepted 9 of 15, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1294 ms (812.7 tok/s), 32 generated in 285 ms (112.3 tok/s), drafts accepted 19 of 26, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1266 ms (830.8 tok/s), 32 generated in 259 ms (123.4 tok/s), drafts accepted 15 of 25, 1 checkpoints
+strata serve: prompt 1052 tokens = 0 reused + 1052 read in 1261 ms (834.4 tok/s), 32 generated in 307 ms (104.4 tok/s), drafts accepted 16 of 35, 1 checkpoints
+strata serve: prompt 8052 tokens = 0 reused + 8052 read in 2134 ms (3772.5 tok/s), 32 generated in 205 ms (156.4 tok/s), drafts accepted 16 of 27, 1 checkpoints
+strata serve: prompt 8052 tokens = 0 reused + 8052 read in 2137 ms (3768.4 tok/s), 32 generated in 182 ms (175.8 tok/s), drafts accepted 17 of 24, 1 checkpoints
+strata serve: prompt 8052 tokens = 0 reused + 8052 read in 2086 ms (3859.5 tok/s), 32 generated in 199 ms (160.9 tok/s), drafts accepted 15 of 25, 1 checkpoints
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 7033 ms (4557.5 tok/s), 128 generated in 936 ms (136.8 tok/s), drafts accepted 80 of 93, 2 checkpoints
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 7280 ms (4402.6 tok/s), 128 generated in 645 ms (198.3 tok/s), drafts accepted 91 of 94, 2 checkpoints
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 7174 ms (4467.9 tok/s), 128 generated in 805 ms (159.0 tok/s), drafts accepted 61 of 79, 2 checkpoints
+19:35:55 === tier telemetry (this run) ===
+strata serve: adaptive tier: round 66 swapped 26 (total 2630), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: expert tiers this round: routes fixed 49.7%, adaptive 47.3%, CPU miss 3.0%
+strata serve: adaptive tier: round 67 swapped 43 (total 2673), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: expert tiers this round: routes fixed 42.1%, adaptive 54.9%, CPU miss 3.0%
+strata serve: adaptive tier: round 68 swapped 27 (total 2700), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: expert tiers this round: routes fixed 38.2%, adaptive 59.2%, CPU miss 2.6%
+19:35:59 engine stopped, VRAM used=34 MiB
+NInfer-kaushikvira-swift15
+19:35:59 swift15 started (explicit)
+19:36:05 8088 healthy
+Failed to stop llm-deadman.service: Unit llm-deadman.service not loaded.
+19:36:05 dead-man cancelled; A/B window closed
