@@ -1,0 +1,35 @@
+NInfer-kaushikvira-swift15
+07:41:50 VRAM released (used=34 MiB)
+strata generate: expert cache 12587 slots, 23.91 GiB of VRAM; policy is
+07:42:25 [fixed0] engine ready
+fixed0 r0 conv0: OK in 7.1s usage={'prompt_tokens': 20052, 'completion_tokens': 512, 'total_tokens': 20564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0 r0 conv1: OK in 6.4s usage={'prompt_tokens': 20052, 'completion_tokens': 512, 'total_tokens': 20564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0 r0 conv2: OK in 6.4s usage={'prompt_tokens': 20052, 'completion_tokens': 512, 'total_tokens': 20564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0: 3/3 requests completed
+07:42:45 === [fixed0] swap telemetry (this run) ===
+adapt rounds: 105, swaps total: 2826, avg/round: 26.9, max/round: 64
+strata serve: adaptive tier: round 105 swapped 8 (total 2826), no-victim layers this round 0 (total 0), fixed evict attempts 0
+strata serve: decode expert cache hit rate: 98.8% (247922 hits / 251037 lookups); 963 more read by the GPU over PCIe or from another GPU (0.4% of all 252000 routed)
+strata serve: prompt 20052 tokens = 0 reused + 20052 read in 4303 ms (4660.3 tok/s), 512 generated in 2673 ms (191.6 tok/s), drafts accepted 373 of 395, 2 checkpoints
+strata serve: prompt 20052 tokens = 0 reused + 20052 read in 4435 ms (4521.0 tok/s), 512 generated in 1902 ms (269.2 tok/s), drafts accepted 378 of 385, 2 checkpoints
+strata serve: prompt 20052 tokens = 0 reused + 20052 read in 4383 ms (4574.5 tok/s), 512 generated in 1926 ms (265.8 tok/s), drafts accepted 368 of 380, 2 checkpoints
+07:42:48 engine stopped (VRAM 34 MiB)
+strata generate: expert cache 12636 slots, 24.00 GiB of VRAM; policy is
+strata generate: fixed tier: 6318 of 12636 slots (11.99 GiB of profile-hottest experts, never swapped); adaptive tier: slots 6318..12635 (12.02 GiB)
+strata generate: fixed tier per layer: 83..180 experts (avg 131.6 of 512)
+strata generate: fixed tier: the prompt loan is capped at 6318 of 12636 slots so its tail cannot reach the fixed head
+07:43:45 [fixed50] engine ready
+fixed50 r0 conv0: OK in 8.5s usage={'prompt_tokens': 20052, 'completion_tokens': 512, 'total_tokens': 20564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50 r0 conv1: OK in 7.2s usage={'prompt_tokens': 20052, 'completion_tokens': 512, 'total_tokens': 20564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50 r0 conv2: OK in 7.2s usage={'prompt_tokens': 20052, 'completion_tokens': 512, 'total_tokens': 20564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50: 3/3 requests completed
+07:44:08 === [fixed50] swap telemetry (this run) ===
+adapt rounds: 140, swaps total: 3602, avg/round: 25.7, max/round: 64
+strata serve: adaptive tier: round 141 swapped 9 (total 3602), no-victim layers this round 0 (total 0), fixed evict attempts 0
+tier shares (avg): fixed 0.0% adaptive 0.0% miss 0.0%
+strata serve: decode expert cache hit rate: 98.9% (262570 hits / 265597 lookups); 803 more read by the GPU over PCIe or from another GPU (0.3% of all 266400 routed)
+strata serve: prompt 20052 tokens = 0 reused + 20052 read in 4891 ms (4099.4 tok/s), 512 generated in 3417 ms (149.8 tok/s), drafts accepted 269 of 362, 2 checkpoints
+strata serve: prompt 20052 tokens = 0 reused + 20052 read in 5013 ms (4000.2 tok/s), 512 generated in 2129 ms (240.5 tok/s), drafts accepted 368 of 387, 2 checkpoints
+strata serve: prompt 20052 tokens = 0 reused + 20052 read in 4956 ms (4045.6 tok/s), 512 generated in 2150 ms (238.1 tok/s), drafts accepted 341 of 383, 2 checkpoints
+07:44:11 engine stopped (VRAM 34 MiB)
+07:44:11 window closed; swift15 left stopped
