@@ -308,6 +308,20 @@ strata generate: pre-filled 12045 of 12045 slots from the profile
 - 内存：空闲 MemAvailable 6.2 GiB → **峰值 3.1 GiB**（32K 档后；SwapFree 不变、PSI full 0，**未换页**）；RSS 55–58 GiB、THP AnonHugePages 38 GiB；
 - **对照专家安全线（满载 MemAvailable ≥ 8 GiB）：低于线**，也低于交接文档预测的 4–6 GiB。处置选项：① 接受现状进实际使用（观察）；② `--conversation-cache-mib 6144 → 2048` 换回 ~4 GiB；③ 立项方案 B（tier 有序 arena，真归还 ~11 GiB）。
 
+## 9.6 方案 B（2026-10-07，用户立项）：tier 有序 arena，固定区真归还
+
+A/B 的 3.1 GiB 峰值低于 8 GiB 安全线，用户裁定立项方案 B（专家审核 §5.1 背书的首选结构方向）。核心：让固定区在 arena 里**按层连续成块**，注册/注销/DONTNEED 才能按块进行，~11.2 GiB 固定区在 profile fill 后真正归还 OS。
+
+**设计（已落码，commit 见下）**：
+- `ExpertLayout.expert_off`（每专家字节偏移表，空 = 规范布局）：`expert_layout_tier_order(profile)` 把每层的 profile 专家按**全局排名序**排到该层字节区**前部**，未 profile 的按 id 序排后部。层起点与层总字节不变（PinnedArena 的逐层 bounds 仍有效）；`blob_offset` 查表，12 个消费点自动跟随。固定区 = 排名前 `fn` 对（`fn` 与缓存槽数相关，构建时未知）→ 用"全部 profile 专家"做前块（`fn` 对必是其中按层的前缀），注册/DONTNEED 按 `fn` 对逐层算块，与 `fn` 的最终值解耦。
+- 注册（`register_tier_runs`，替代逐层整层）：每层至多 2 个外对齐 run——固定块（fill 需要活源，Mapped 注册）+ 非固定块（PCIe alias）。`fn`=0 时坍缩为原来的整层单 run（规范布局自动走旧形）。96 run 远低于驱动段数上限（t15 已证 48 层 Mapped 无压力）。
+- 加载：`experts.bin` 是规范序、arena 是 tier 序 → 新 `load_experts_tier`（逐层顺序读、按 8 MiB chunk、chunk 跨 blob 边界逐专家落到 tier 目的地；FNV 校验和按文件序，与旧加载器一致）。GGUF 路径本来就写 `blob_offset` 位置，自动跟随。`STRATA_ARENA_MMAP`（映射规范序文件）与 tier 序互斥，拒绝。
+- `release_fixed_tier()` 变真：逐层注销固定 run + 对**页对齐内部** `MADV_DONTNEED`（外沿共享页不动，~96 KiB 残留），返回真实归还字节；`fixed_released_` 武装 `blob()` 守卫——release 后读固定专家返回 nullptr（落 CPU 路径）并告警一次，**不读零页**（专家 §5.1）。
+- 回退：`expert_off` 空（canonical）时 `register_pcie_alias` 走整层 run、`release_fixed_tier` 恒 0——即 P4-A 现行为，逐层退化不炸。
+- 自校验：`tests/core/expert_layout_test.cpp` 新增 tier 段（排名序/双射/字节和不变/重复对与越界拒绝/`load_experts_tier` 逐字节对 100-B chunk 跨边界的合成包）全过。
+
+**验收（需 GPU 窗口）**：日志 `tier-ordered layout` + `PCIe alias registered over ~35–47 GiB in 9x tier runs` + fill 全槽 + `expert arena: ~11 GiB of VRAM-held experts handed back to the OS`（真数，非 0）+ 峰值 MemAvailable 回升到 8 GiB 线以上 + 32K prefill 不劣于 A/B 的 4468 tok/s + `fixed evict attempts` 恒 0 + 无 `fixed-tier expert ... released` 告警。
+
 ## 10. 明确不做（后续单独立项）
 
 - 100% 显存专家释放 RAM（自适应换入变磁盘读）

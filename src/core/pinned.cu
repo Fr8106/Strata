@@ -694,6 +694,113 @@ LoadStats load_experts_ranges(const std::string& path, uint8_t* dst, const std::
     return st;
 }
 
+// P4-B (the tier-ordered arena): the file is canonical - layer L's n_expert blobs in id order at
+// `layer_off[L]` - but the arena's copy of the layer has its profiled experts first (the layout's
+// expert_off table), so each blob lands at `expert_dst[L * n_expert + e]`.  The read stays sequential: a
+// chunk may straddle expert borders, and the per-expert copy resolves them.  The per-layer FNV-1a runs over
+// the FILE order (each blob once, in id order), so the checksums equal load_experts_ranges' for the same file.
+LoadStats load_experts_tier(const std::string& path, uint8_t* dst, const std::vector<uint64_t>& layer_off,
+                            const std::vector<uint64_t>& layer_bytes, const std::vector<uint64_t>& expert_dst,
+                            int threads, uint64_t chunk) {
+    LoadStats st;
+    const uint64_t layers = (uint64_t) layer_off.size();
+    st.layers = layers;
+    st.bytes = 0;
+    for (uint64_t b : layer_bytes) st.bytes += b;
+    const uint64_t n_expert = layers > 0 && !expert_dst.empty() ? (uint64_t) (expert_dst.size() / layers) : 0;
+    if (layers == 0 || n_expert == 0 || chunk == 0) { st.ok = false; st.error = "load_experts_tier: bad arguments"; return st; }
+    if (threads < 1) threads = 1;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<uint64_t> layer_hash((size_t) layers, 1469598103934665603ull);
+    std::atomic<uint64_t> next_layer{0};
+    std::atomic<uint64_t> read_ns_sum{0};
+    std::atomic<uint64_t> copy_ns_sum{0};
+    std::mutex err_mu;
+    std::string err;
+
+    auto worker = [&]() {
+        std::vector<uint8_t> buf((size_t) chunk);
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (f == nullptr) {
+            std::lock_guard<std::mutex> g(err_mu);
+            err = "cannot open " + path;
+            return;
+        }
+        struct Closer {
+            FILE* f;
+            ~Closer() { if (f != nullptr) std::fclose(f); }
+        } closer{f};
+        uint64_t read_ns = 0, copy_ns = 0;
+        for (;;) {
+            const uint64_t L = next_layer.fetch_add(1);
+            if (L >= layers) break;
+            const uint64_t off = layer_off[(size_t) L];
+            const uint64_t per = layer_bytes[(size_t) L] / n_expert;
+            uint64_t remaining = layer_bytes[(size_t) L];
+            uint64_t pos = 0;
+            uint64_t h = 1469598103934665603ull;
+            if (STRATA_FSEEK64(f, off) != 0) {
+                std::lock_guard<std::mutex> g(err_mu);
+                err = "seek to " + std::to_string(off) + " B failed in layer " + std::to_string(L);
+                return;
+            }
+            while (remaining > 0) {
+                const uint64_t n = remaining < chunk ? remaining : chunk;
+                const auto t_read = std::chrono::steady_clock::now();
+                const size_t got = std::fread(buf.data(), 1, (size_t) n, f);
+                read_ns += (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - t_read).count();
+                if (got != (size_t) n) {
+                    std::lock_guard<std::mutex> g(err_mu);
+                    err = "short read in layer " + std::to_string(L) + ": got " + std::to_string(got) + " of "
+                          + std::to_string(n) + " B at offset " + std::to_string(off + pos)
+                          + (std::ferror(f) != 0 ? " (ferror set)" : "");
+                    return;
+                }
+                const auto t_copy = std::chrono::steady_clock::now();
+                // each expert e whose [e*per, (e+1)*per) touches [pos, pos+n) gets its intersection copied to
+                // its tier destination: at most two experts per chunk edge, the interior of one each
+                const uint64_t e0 = pos / per, e1 = (pos + n - 1) / per;
+                for (uint64_t e = e0; e <= e1; ++e) {
+                    const uint64_t es = std::max<uint64_t>(pos, e * per);
+                    const uint64_t ee = std::min<uint64_t>(pos + n, (e + 1) * per);
+                    const uint64_t in_buf = es - pos;
+                    const uint64_t at_expert = es - e * per;
+                    std::memcpy(dst + expert_dst[(size_t) L * n_expert + (size_t) e] + at_expert,
+                                buf.data() + in_buf, (size_t) (ee - es));
+                }
+                h = fnv1a64(buf.data(), n, h);
+                copy_ns += (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now() - t_copy).count();
+                pos += n;
+                remaining -= n;
+            }
+            layer_hash[(size_t) L] = h;
+        }
+        read_ns_sum.fetch_add(read_ns);
+        copy_ns_sum.fetch_add(copy_ns);
+    };
+
+    std::vector<std::thread> pool;
+    for (int i = 1; i < threads; ++i) pool.emplace_back(worker);
+    worker();
+    for (auto& t : pool) t.join();
+
+    if (!err.empty()) {
+        std::fprintf(stderr, "load_experts: %s\n", err.c_str());
+        st.seconds = -1.0;
+        st.ok = false;
+        st.error = err;
+        return st;
+    }
+    st.read_seconds = (double) read_ns_sum.load() / 1e9;
+    st.copy_seconds = (double) copy_ns_sum.load() / 1e9;
+    st.layer_checksums = std::move(layer_hash);
+    st.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return st;
+}
+
 StreamStats stream_bandwidth(const uint8_t* src, uint64_t bytes, uint64_t chunk, int iters) {
     StreamStats st;
     st.bytes = bytes * (uint64_t) iters;

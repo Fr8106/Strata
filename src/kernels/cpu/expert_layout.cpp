@@ -338,4 +338,50 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
 #endif
 }
 
+// P4-B (option B): the tier-ordered layout.  Each layer's profiled experts - in the profile's global rank
+// order - take the front of the layer's byte range, the unprofiled experts (id order) the rest.  The fixed
+// tier is a PREFIX of the profiled set (the ranking's first `fn` pairs), so it is a page-alignable prefix of
+// the front: one run to register for the profile fill, one DONTNEED to hand its host bytes back afterwards.
+// The layer starts and totals are unchanged, so the PinnedArena's per-layer bounds and every size check in
+// open() stay valid.
+bool expert_layout_tier_order(const std::vector<std::pair<int32_t, int32_t>>& profile, std::string& err) {
+    auto& L = g_layout;
+    if (L.n_layers <= 0) { err = "expert_layout_tier_order: the layout was never loaded"; return false; }
+    std::vector<uint8_t> profd((size_t) L.n_layers * (size_t) L.n_expert, 0);
+    std::vector<std::vector<int64_t>> front((size_t) L.n_layers);
+    for (const auto& pr : profile) {
+        if (pr.first < 0 || pr.first >= L.n_layers || pr.second < 0 || pr.second >= L.n_expert) {
+            err = "expert_layout_tier_order: pair (" + std::to_string(pr.first) + "," + std::to_string(pr.second) +
+                  ") is outside the " + std::to_string(L.n_layers) + " x " + std::to_string(L.n_expert) + " geometry";
+            return false;
+        }
+        const size_t g = (size_t) pr.first * (size_t) L.n_expert + (size_t) pr.second;
+        if (profd[g]) {
+            err = "expert_layout_tier_order: pair (" + std::to_string(pr.first) + "," + std::to_string(pr.second) +
+                  ") is named twice in the profile";
+            return false;
+        }
+        profd[g] = 1;
+        front[(size_t) pr.first].push_back((int64_t) pr.second);
+    }
+    L.expert_off.assign((size_t) L.n_layers * (size_t) L.n_expert, 0);
+    for (int64_t l = 0; l < L.n_layers; ++l) {
+        const uint64_t base = L.layer_offset(l), per = L.blob_bytes(l);
+        uint64_t pos = 0;
+        for (int64_t e : front[(size_t) l]) L.expert_off[(size_t) l * (size_t) L.n_expert + (size_t) e] = base + pos++ * per;
+        for (int64_t e = 0; e < L.n_expert; ++e)
+            if (!profd[(size_t) l * (size_t) L.n_expert + (size_t) e])
+                L.expert_off[(size_t) l * (size_t) L.n_expert + (size_t) e] = base + pos++ * per;
+        // structural: front holds each profiled expert once and the loop above covers exactly the rest, so a
+        // wrong pos here means the table does not biject the layer's experts
+        if (pos != (uint64_t) L.n_expert) {
+            err = "expert_layout_tier_order: layer " + std::to_string(l) + " placed " + std::to_string(pos) +
+                  " of " + std::to_string(L.n_expert) + " experts";
+            L.expert_off.clear();
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace strata::kernels::cpu

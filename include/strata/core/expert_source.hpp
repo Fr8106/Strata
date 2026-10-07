@@ -725,14 +725,21 @@ private:
     std::vector<const uint8_t*> blob_dev_;    ///< selective mode: per-blob device alias, null = CPU-side
     std::vector<uint8_t> layer_alias_;        ///< selective mode: 1 = the layer has at least one aliased expert
     std::vector<uint64_t> alias_runs_;        ///< selective mode: start of each registered run, for unregister
-    std::vector<std::pair<uint64_t,uint64_t>> fixed_runs_;  ///< selective mode: the fixed tier's registered runs
-                                                          ///< (start, length) - registered so the fill can read them,
-                                                          ///< released by release_fixed_tier()
+    /// Selective mode: PER LAYER (index = layer, {0,0} = none), the fixed tier's raw range inside the layer -
+    /// [first, first + len) in the tier-ordered layout, where the profiled experts lead.  Registered (outward
+    /// page-aligned) so the fill can read it, then unregistered + DONTNEED'd (page-aligned interior) by
+    /// release_fixed_tier() - which is what actually hands the tier's ~11 GiB of host RAM back.
+    std::vector<std::pair<uint64_t,uint64_t>> fixed_runs_;
+    std::vector<int64_t> fixed_cnt_;          ///< selective mode: per layer, how many of its experts are fixed
     std::vector<uint8_t> host_free_;          ///< selective mode: 1 = the fixed tier's blob, host copy discardable
+    bool fixed_released_ = false;             ///< selective mode: the fixed tier's pages went back to the OS;
+                                              ///< blob() must not hand out a pointer into them (they would fault zero)
+    std::atomic<bool> fixed_warned_{false};   ///< the blob() guard says it once (the pool's threads race to it)
     struct reg_stats { int runs = 0, refused = 0; uint64_t bytes = 0; };
-    reg_stats register_layers(uint32_t flags, int max_runs);   ///< the per-layer registration loop (canary ladder reuses it)
+    reg_stats register_tier_runs(uint32_t flags, int max_runs, bool include_fixed);   ///< the per-layer two-run
+                                              ///< loop: the fixed run (if include_fixed) + the non-fixed run
     bool canary(std::string& err, bool pageable = false);      ///< small HtoD + read-back at sampled layers
-    int max_runs_ = -1;                                        ///< STRATA_PCIE_ALIAS_MAX_RUNS, -1 = all layers
+    int max_runs_ = -1;                                        ///< STRATA_PCIE_ALIAS_MAX_RUNS, -1 = all runs
     uint64_t slice_bytes_ = 0;
     const uint8_t* base_ = nullptr;
     int64_t blobs_ = 0;

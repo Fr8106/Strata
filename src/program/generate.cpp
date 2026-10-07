@@ -3215,6 +3215,20 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "strata generate: STRATA_PCIE_ALIAS=0: the P4-A selective registration is off, "
                                  "the arena is pinned wholesale\n");
         }
+        // P4-B (option B, docs/EXPERT_SPLIT_PLAN.md §9.5): with the fixed tier, order the arena so each layer's
+        // profiled experts lead its byte range - the fixed tier (a prefix of them) becomes one per-layer run
+        // that the fill reads and release_fixed_tier() then unregisters + DONTNEEDs, handing its ~11 GiB of
+        // host RAM back for real.  The table must be set BEFORE open() loads the bytes.
+        if (selective_alias && !profile.empty()) {
+            std::string terr;
+            if (strata::kernels::cpu::expert_layout_tier_order(profile, terr))
+                std::fprintf(stderr, "strata generate: expert arena: tier-ordered layout (%zu profiled experts "
+                                     "lead each layer; the fixed tier is released after the profile fill)\n",
+                             profile.size());
+            else
+                std::fprintf(stderr, "strata generate: WARNING: %s - the canonical arena layout is kept, the "
+                                     "fixed tier stays pinned\n", terr.c_str());
+        }
         if (!arena_src.open(o.pack, g.n_layers, g.n_expert, /*threads=*/6, err,
                             selective_alias ? (uint64_t) strata::core::PinnedArena::kDeferRegistration : pin_limit,
                             o.shared_expert_arena)) {

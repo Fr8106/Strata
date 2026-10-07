@@ -2737,6 +2737,11 @@ bool ArenaExpertSource::open(const std::string& pack_dir, int64_t n_layers, int6
     static const bool arena_mmap = false;   // POSIX mmap/madvise: Linux only for now
 #else
     static const bool arena_mmap = [] { const char* v = std::getenv("STRATA_ARENA_MMAP"); return v && v[0] == '1'; }();
+    if (arena_mmap && !lay.expert_off.empty()) {
+        err = "ArenaExpertSource: STRATA_ARENA_MMAP maps the canonical experts.bin, but the arena is "
+              "tier-ordered (P4-B): map mode is refused, run without STRATA_ARENA_MMAP";
+        return false;
+    }
     if (arena_mmap) {
         const uint64_t file_bytes = want + (uint64_t) blob;
         uint64_t have = 0;
@@ -2837,7 +2842,14 @@ bool ArenaExpertSource::open(const std::string& pack_dir, int64_t n_layers, int6
     const int readers = unbuffered ? std::max(threads, 16) : threads;   // 16 keep a PCIe 5 drive's queue full
     LoadStats st;
     if (from_gguf) {
+        // the GGUF reader writes each expert at lay.blob_offset(l, e), so it follows the tier-ordered table
+        // (a native pack without experts.bin) with no change of its own
         st = load_experts_gguf(gguf_, a->data(), lay, readers, unbuffered);
+    } else if (!lay.expert_off.empty()) {
+        // P4-B: the file is canonical, the arena is tier-ordered - each expert's bytes go to a per-expert
+        // destination (the unbuffered reader cannot express that, so this is the buffered path on both
+        // platforms)
+        st = load_experts_tier(path, a->data(), loff, lbytes, lay.expert_off, readers, /*chunk=*/8u << 20);
     } else {
         if (unbuffered) st = load_experts_direct(path, a->data(), loff, lbytes, readers, /*chunk=*/8u << 20);
         if (!unbuffered || (!st.ok && st.error.empty()))   // unaligned ranges: the buffered reader
@@ -2913,13 +2925,16 @@ void ArenaExpertSource::close() {
     // class that hands them back - PinnedArena's own unregister loop would otherwise fire at nothing.
     if (base_ != nullptr) {
         for (uint64_t off : alias_runs_) { cudaHostUnregister((void*) ((uint8_t*) base_ + off)); (void) cudaGetLastError(); }
-        for (const auto& r : fixed_runs_) { cudaHostUnregister((void*) ((uint8_t*) base_ + r.first)); (void) cudaGetLastError(); }
+        for (const auto& r : fixed_runs_)
+            if (r.second > 0) { cudaHostUnregister((void*) ((uint8_t*) base_ + r.first)); (void) cudaGetLastError(); }
     }
     alias_runs_.clear();
     fixed_runs_.clear();
+    fixed_cnt_.clear();
     host_free_.clear();
     blob_dev_.clear();
     layer_alias_.clear();
+    fixed_released_ = false;
 #if !defined(_WIN32)
     if (map_ != nullptr) munmap(map_, (size_t) map_bytes_);
 #endif
@@ -2980,21 +2995,32 @@ uint64_t ArenaExpertSource::release(int64_t layer, int64_t expert) {
 #endif
 }
 
-// P4-A: the fixed tier was registered so the profile fill could copy it over a live source.  Nothing reads those
-// host bytes after the fill (every later reader goes through the miss set, which never contains a fixed expert),
-// so hand the whole tier back: unregister each fixed run (releases the pin) and DONTNEED its pages.  A fixed blob
-// left with a stale device alias would read freed memory over the PCIe path, so its alias is dropped too.
+// P4-B: the fixed tier's runs were registered only so the profile fill could copy them over a live source.
+// Nothing reads those host bytes after the fill (every later reader of a fixed expert hits its VRAM slot; the
+// miss set never contains a fixed expert), so hand the whole tier back FOR REAL: unregister each fixed run
+// (releases the pin) and DONTNEED its pages - the ~11 GiB the pre-B scheme could not return.  Only the
+// page-aligned INTERIOR is dropped: the outward-aligned edge pages are shared with the non-fixed run's
+// registration and may hold live bytes (at most 2 x 4 KiB per layer, ~96 KiB in total).  A fixed blob left
+// with a live device alias would read freed memory over the PCIe path, so its alias is dropped too, and
+// fixed_released_ arms the blob() guard: a read of a released fixed expert must fall back, not fault a zero
+// page.
 uint64_t ArenaExpertSource::release_fixed_tier() {
 #if defined(_WIN32)
     return 0;
 #else
     uint64_t released = 0;
     for (const auto& r : fixed_runs_) {
-        cudaHostUnregister((void*) ((uint8_t*) base_ + r.first));
+        if (r.second == 0) continue;
+        const uint64_t ufs = r.first & ~(uint64_t) 4095;             // the outward-registered range's start
+        cudaHostUnregister((void*) ((uint8_t*) base_ + ufs));
         (void) cudaGetLastError();
-        if (madvise((uint8_t*) base_ + r.first, r.second, MADV_DONTNEED) == 0) released += r.second;
+        const uint64_t fs = (r.first + 4095) & ~(uint64_t) 4095;     // the page-aligned interior
+        const uint64_t fe = (r.first + r.second) & ~(uint64_t) 4095;
+        if (fe > fs && madvise((uint8_t*) base_ + fs, (size_t) (fe - fs), MADV_DONTNEED) == 0)
+            released += fe - fs;
     }
     fixed_runs_.clear();
+    fixed_released_ = true;
     for (size_t k = 0; k < host_free_.size(); ++k)
         if (host_free_[k] && k < blob_dev_.size()) blob_dev_[k] = nullptr;
     return released;
@@ -3058,41 +3084,69 @@ static void pcie_reg_log(uint64_t off, const void* ptr, size_t size, uint32_t fl
     }
 }
 
-// The per-layer registration loop: one outward page-aligned run per layer (at most `max_runs` of them, -1 =
-// all).  Runs align OUTWARD to page bounds: the shared edge page gets pinned with the layer, which keeps
-// `d + (blob_offset - run_off)` valid for every blob.  A run the driver refuses leaves its layer's blobs null
-// - like an unregistered slice of the capped mode, those experts just keep the CPU path.
-ArenaExpertSource::reg_stats ArenaExpertSource::register_layers(uint32_t flags, int max_runs) {
+// The per-layer registration loop, P4-B shape: up to TWO outward page-aligned runs per layer - the fixed
+// run (the tier-ordered layout's `fixed_cnt_[l]` leading experts, registered so the profile fill can read
+// it; released by release_fixed_tier()) and the non-fixed run (everything else, the PCIe alias proper).
+// With `fixed_cnt_` all zero (the canonical layout, where the fixed experts are scattered) that collapses to
+// the one whole-layer run the pre-B scheme used.  Runs align OUTWARD to page bounds: the shared edge page
+// gets pinned with BOTH runs, which keeps `d + (blob_offset - run_off)` valid for every blob.  A run the
+// driver refuses leaves its experts' blobs null - like an unregistered slice of the capped mode, those
+// experts just keep the CPU path.  At most `max_runs` registered runs (-1 = all).
+ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flags, int max_runs, bool include_fixed) {
     reg_stats s;
     if (base_ == nullptr || map_ != nullptr) return s;
     const auto& lay = strata::kernels::cpu::expert_layout();
     const int64_t n_layers = blobs_ / n_expert_;
     for (int64_t l = 0; l < n_layers && (max_runs < 0 || s.runs >= max_runs); ++l) {
-        const uint64_t off = lay.layer_offset(l) & ~(uint64_t) 4095;
-        const uint64_t end = (lay.layer_offset(l) + lay.blob_bytes(l) * (uint64_t) n_expert_ + 4095) &
-                             ~(uint64_t) 4095;
-        if (end <= off) continue;
-        void* d = nullptr;
-        // Mapped: the GPU's direct PCIe reads need a device-side zero-copy mapping, which only a Mapped
-        // registration builds (a plain pin helps cudaMemcpy only).  The Mapped flag was first blamed for
-        // the 4628-run failure (a zero-copy mapping PER REGION, thousands of them), but 48 whole-layer
-        // mappings leave the driver plenty of headroom - measured: 48 MAPPED runs register and copy clean
-        // in the engine's full context (t15, 2026-10-07), while the 4628-run shape fails there.
-        const cudaError_t rc = cudaHostRegister((void*) (base_ + off), (size_t) (end - off), flags);
-        pcie_reg_log(off, base_ + off, (size_t) (end - off), flags, (int) rc);
-        if (rc != cudaSuccess ||
-            cudaHostGetDevicePointer(&d, (void*) (base_ + off), 0) != cudaSuccess || d == nullptr) {
-            (void) cudaGetLastError();
-            ++s.refused;
-            continue;
+        const uint64_t off = lay.layer_offset(l);
+        const uint64_t per = lay.blob_bytes(l);
+        const uint64_t nfix = (fixed_cnt_.empty() ? 0 : (uint64_t) fixed_cnt_[(size_t) l]) * per;
+        const uint64_t end = off + (uint64_t) n_expert_ * per;
+        if (include_fixed && nfix > 0) {
+            // Mapped: the GPU's direct PCIe reads need a device-side zero-copy mapping, which only a Mapped
+            // registration builds (a plain pin helps cudaMemcpy only).  96 tier runs (2 x 48 layers) leave the
+            // driver's region budget plenty of headroom, like the 48 whole-layer runs before them.
+            const uint64_t fs = off & ~(uint64_t) 4095;
+            const uint64_t fe = (off + nfix + 4095) & ~(uint64_t) 4095;
+            void* d = nullptr;
+            const cudaError_t rc = cudaHostRegister((void*) (base_ + fs), (size_t) (fe - fs), flags);
+            pcie_reg_log(off, base_ + fs, (size_t) (fe - fs), flags, (int) rc);
+            if (rc == cudaSuccess &&
+                cudaHostGetDevicePointer(&d, (void*) (base_ + fs), 0) == cudaSuccess && d != nullptr) {
+                ++s.runs;
+                s.bytes += fe - fs;
+                alias_runs_.push_back(fs);
+            } else {
+                // a refused fixed run costs only this layer's zero-copy alias: the fill reads through the
+                // host pointer, and the canary ladder's L2 proves the pageable path works
+                (void) cudaGetLastError();
+                ++s.refused;
+            }
         }
-        ++s.runs;
-        s.bytes += end - off;
-        alias_runs_.push_back(off);
-        for (int64_t e = 0; e < n_expert_; ++e) {
-            blob_dev_[(size_t) l * n_expert_ + (size_t) e] =
-                (const uint8_t*) d + ((uint64_t) lay.blob_offset(l, e) - off);
-            layer_alias_[(size_t) l] = 1;
+        if (nfix < (uint64_t) n_expert_ * per && (max_runs < 0 || s.runs < max_runs)) {
+            // the non-fixed run: from the fixed run's end (floor-aligned when it is the whole layer, as
+            // before) to the layer's end; a blob the driver refused leaves its experts on the CPU path
+            const uint64_t ns = nfix == 0 ? (off & ~(uint64_t) 4095) : ((off + nfix + 4095) & ~(uint64_t) 4095);
+            const uint64_t ne = (end + 4095) & ~(uint64_t) 4095;
+            void* d = nullptr;
+            const cudaError_t rc = cudaHostRegister((void*) (base_ + ns), (size_t) (ne - ns), flags);
+            pcie_reg_log(off + nfix, base_ + ns, (size_t) (ne - ns), flags, (int) rc);
+            if (rc == cudaSuccess &&
+                cudaHostGetDevicePointer(&d, (void*) (base_ + ns), 0) == cudaSuccess && d != nullptr) {
+                ++s.runs;
+                s.bytes += ne - ns;
+                alias_runs_.push_back(ns);
+                for (int64_t e = 0; e < n_expert_; ++e) {
+                    const uint64_t bo = lay.blob_offset(l, e);
+                    if (bo >= off + nfix && bo < end)
+                        blob_dev_[(size_t) l * n_expert_ + (size_t) e] =
+                            (const uint8_t*) d + (bo - ns);
+                }
+                layer_alias_[(size_t) l] = 1;
+            } else {
+                (void) cudaGetLastError();
+                ++s.refused;
+            }
         }
     }
     return s;
@@ -3103,28 +3157,47 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
         err = "register_pcie_alias: the arena is not in selective-registration mode";
         return false;
     }
-    // host_free_ outlives this call: release() frees ONLY these named blobs' host pages.  A run the driver
-    // refused also has null blob_dev_ entries, and equating "no alias" with "fixed" would zero a live
-    // expert's only host copy when it later left VRAM - the skip set is the authority, not the alias table.
+    const auto& lay = strata::kernels::cpu::expert_layout();
+    const int64_t n_layers = blobs_ / n_expert_;
+    // P4-B: the tier split (fixed run per layer) is only meaningful when the arena is tier-ORDERED - the
+    // profiled experts leading each layer's byte range.  A canonical arena (expert_off empty) has the fixed
+    // experts scattered, so it keeps the pre-B shape: whole-layer runs, the fixed tier staying pinned.
+    const bool tiered = !lay.expert_off.empty();
+    // host_free_ outlives this call: it is the per-expert fixed mark release() and blob() consult after the
+    // tier release.  A run the driver refused also has null blob_dev_ entries, and equating "no alias" with
+    // "fixed" would zero a live expert's only host copy when it later left VRAM - the skip set is the
+    // authority, not the alias table.
     host_free_.assign((size_t) blobs_, 0);
+    fixed_cnt_.assign((size_t) n_layers, 0);
     for (const auto& s : skip)
         if (s.first >= 0 && s.second >= 0 && s.second < n_expert_ &&
-            (uint64_t) s.first < (uint64_t) (blobs_ / n_expert_))
+            (uint64_t) s.first < (uint64_t) n_layers) {
             host_free_[(size_t) s.first * n_expert_ + (size_t) s.second] = 1;
+            if (tiered) fixed_cnt_[(size_t) s.first]++;
+        }
     blob_dev_.assign((size_t) blobs_, nullptr);
-    layer_alias_.assign((size_t) (blobs_ / n_expert_), 0);
+    layer_alias_.assign((size_t) n_layers, 0);
+    fixed_runs_.assign((size_t) n_layers, {0, 0});
+    if (tiered)
+        for (int64_t l = 0; l < n_layers; ++l)
+            if (fixed_cnt_[(size_t) l] > 0)
+                fixed_runs_[(size_t) l] = {lay.layer_offset(l), (uint64_t) fixed_cnt_[(size_t) l] * lay.blob_bytes(l)};
     if (const char* mr = std::getenv("STRATA_PCIE_ALIAS_MAX_RUNS")) max_runs_ = std::atoi(mr);
-    const reg_stats s = register_layers(cudaHostRegisterPortable | cudaHostRegisterMapped, max_runs_);
+    const reg_stats s = register_tier_runs(cudaHostRegisterPortable | cudaHostRegisterMapped, max_runs_, true);
     if (s.runs == 0) {
-        blob_dev_.clear(); layer_alias_.clear(); alias_runs_.clear(); fixed_runs_.clear(); host_free_.clear();
+        blob_dev_.clear(); layer_alias_.clear(); alias_runs_.clear(); fixed_runs_.clear();
+        host_free_.clear(); fixed_cnt_.clear();
         err = "register_pcie_alias: the driver refused every run";
         return false;
     }
-    std::fprintf(stderr, "strata generate: expert arena: PCIe alias registered over %.2f GiB in %d per-layer "
-                         "runs%s; the fixed tier's %zu experts stay pinned (per-layer runs can't release them "
-                         "under the driver's region cap)\n",
-                 (double) s.bytes / 1073741824.0, s.runs,
-                 s.refused ? (", " + std::to_string(s.refused) + " run(s) refused").c_str() : "", skip.size());
+    const std::string fixed_note = tiered
+        ? "; the fixed tier's " + std::to_string(skip.size()) +
+              " experts are released (unregister + DONTNEED) after the profile fill"
+        : "; the fixed tier's " + std::to_string(skip.size()) +
+              " experts stay pinned (the canonical arena has no tier runs to release)";
+    std::fprintf(stderr, "strata generate: expert arena: PCIe alias registered over %.2f GiB in %d %s runs%s%s\n",
+                 (double) s.bytes / 1073741824.0, s.runs, tiered ? "tier" : "per-layer",
+                 s.refused ? (", " + std::to_string(s.refused) + " run(s) refused").c_str() : "", fixed_note.c_str());
     return true;
 }
 
@@ -3147,9 +3220,15 @@ bool ArenaExpertSource::canary(std::string& err, bool pageable) {
     }
     const int64_t step = std::max<int64_t>(1, n_layers / 7);
     for (int64_t l = 0; l < n_layers; l += step) {
-        const uint64_t off = lay.layer_offset(l) & ~(uint64_t) 4095;
-        const uint64_t end = (lay.layer_offset(l) + lay.blob_bytes(l) * (uint64_t) n_expert_ + 4095) &
-                             ~(uint64_t) 4095;
+        // P4-B: sample inside the REGISTERED part of the layer.  In the tier-ordered layout the fixed run
+        // leads the layer, so a sample at the layer start would prove the fixed run (fine before the
+        // release, meaningless after) - sample the non-fixed run instead, or the whole layer when it has
+        // no non-fixed part.
+        const uint64_t off0 = lay.layer_offset(l);
+        const uint64_t tot = lay.blob_bytes(l) * (uint64_t) n_expert_;
+        const uint64_t nfix = (fixed_cnt_.empty() ? 0 : (uint64_t) fixed_cnt_[(size_t) l]) * lay.blob_bytes(l);
+        const uint64_t off = ((nfix > 0 && nfix < tot ? off0 + nfix : off0) & ~(uint64_t) 4095);
+        const uint64_t end = (off0 + tot + 4095) & ~(uint64_t) 4095;
         if (end <= off) continue;
         const bool regd = !layer_alias_.empty() && layer_alias_[(size_t) l] != 0;
         if (!regd && !pageable) continue;   // a refused layer keeps the CPU path; nothing to prove
@@ -3194,7 +3273,7 @@ std::string ArenaExpertSource::canary_ladder(std::string& err) {
     alias_runs_.clear();
     std::fill(layer_alias_.begin(), layer_alias_.end(), (uint8_t) 0);
     std::fill(blob_dev_.begin(), blob_dev_.end(), (const uint8_t*) nullptr);   // stale L0 device pointers
-    if (register_layers(cudaHostRegisterPortable, max_runs_).runs > 0 && canary(err)) return "L1";
+    if (register_tier_runs(cudaHostRegisterPortable, max_runs_, true).runs > 0 && canary(err)) return "L1";
     for (uint64_t off : alias_runs_) {
         cudaHostUnregister((void*) (base_ + off));
         (void) cudaGetLastError();
@@ -3212,6 +3291,17 @@ const uint8_t* ArenaExpertSource::blob(int64_t layer, int64_t expert) {
     if (layer < 0 || expert < 0 || expert >= n_expert_) return nullptr;
     const int64_t idx = layer * n_expert_ + expert;
     if (idx < 0 || idx >= blobs_) return nullptr;
+    if (fixed_released_ && !host_free_.empty() && host_free_[(size_t) idx]) {
+        // The fixed tier's host pages are back with the OS: a read here would fault a ZERO page and the GPU
+        // would compute a zero expert (docs/reviews/P4A-REVIEW-2026-10-07 §5.1: never silent zeros).  A fixed
+        // expert lives in its VRAM slot, so this only fires on a logic bug - say so once and let the caller
+        // fall back to its file/CPU path.
+        if (fixed_warned_.exchange(true)) return nullptr;
+        std::fprintf(stderr, "strata generate: WARNING: a fixed-tier expert (layer %lld, expert %lld) was read "
+                             "from the arena after its tier was released - falling back to the CPU path\n",
+                     (long long) layer, (long long) expert);
+        return nullptr;
+    }
     ++reads_;
     // Pointer arithmetic into resident memory.  No fault, no copy, no mapping - which is the entire point of
     // this class over `FileExpertSource`.

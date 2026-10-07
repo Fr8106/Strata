@@ -108,6 +108,14 @@ LoadStats load_experts(const std::string& path, uint8_t* dst, uint64_t blob_byte
 /// Plan v0.3 P6: the same with one byte range per layer (`layer_off[L]`, `layer_bytes[L]`).
 LoadStats load_experts_ranges(const std::string& path, uint8_t* dst, const std::vector<uint64_t>& layer_off,
                               const std::vector<uint64_t>& layer_bytes, int threads, uint64_t chunk);
+/// P4-B (the tier-ordered arena): the file is canonical (each layer's experts in id order at its file range)
+/// but the arena's layer has its profiled experts FIRST, so each expert's bytes go to a per-expert
+/// destination: `expert_dst[l * n_expert + e]` (the layout's `expert_off` table).  The reads stay sequential
+/// per layer (a chunk may straddle expert borders; the copy resolves them), and the per-layer FNV-1a is over
+/// the file order, so the checksums equal `load_experts_ranges`' for the same file.
+LoadStats load_experts_tier(const std::string& path, uint8_t* dst, const std::vector<uint64_t>& layer_off,
+                            const std::vector<uint64_t>& layer_bytes, const std::vector<uint64_t>& expert_dst,
+                            int threads, uint64_t chunk);
 
 /// The same ranges read UNBUFFERED straight into `dst` (Windows): no staging buffer and no file-cache copy - the
 /// drive's DMA lands where the experts live. Every range, `dst` and `chunk` must be 4 KiB aligned; returns ok =

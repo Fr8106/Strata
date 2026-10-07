@@ -31,12 +31,19 @@ struct ExpertLayout {
     int version = 0;                      ///< native_experts.txt's header version (0 = none given)
     uint64_t max_blob = BLOB;
     uint64_t total = 0;                   ///< experts.bin size
+    /// P4-B (docs/EXPERT_SPLIT_PLAN.md §9.5, option B): per-expert byte offsets into the arena - empty = the
+    /// canonical formula below.  Set by expert_layout_tier_order() so a layer's profiled experts lead its byte
+    /// range: the fixed tier (a prefix of them) is then one page-aligned run to register for the fill and
+    /// DONTNEED afterwards, which is what hands its ~11 GiB of host RAM back.
+    std::vector<uint64_t> expert_off;
 
     uint64_t blob_bytes(int64_t layer) const { return native ? bytes[(size_t) layer] : (uint64_t) BLOB; }
     uint64_t layer_offset(int64_t layer) const {
         return native ? offset[(size_t) layer] : (uint64_t) layer * (uint64_t) n_expert * (uint64_t) BLOB;
     }
     uint64_t blob_offset(int64_t layer, int64_t expert) const {
+        if (!expert_off.empty())
+            return expert_off[(size_t) layer * (size_t) n_expert + (size_t) expert];
         return layer_offset(layer) + (uint64_t) expert * blob_bytes(layer);
     }
 };
@@ -78,5 +85,11 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
 /// The newest native_experts.txt this engine reads.  v4 = v3 plus the per-role shard column `gate,up,down`,
 /// written only when some layer's roles are in different shards (every other pack stays v3, byte for byte).
 inline constexpr int kExpertLayoutVersion = 4;
+/// P4-B (option B, the tier-ordered arena): order each layer's experts so the profiled ones (in the profile's
+/// rank order) lead the layer's byte range and the unprofiled follow in id order.  The total size and every
+/// layer's start are unchanged, so the PinnedArena's per-layer bounds stay valid; only `blob_offset` moves.
+/// `profile` is the packed (layer, expert) ranking (hottest first).  false (with `err`) on an out-of-range or
+/// duplicated pair; the layout is left canonical.
+bool expert_layout_tier_order(const std::vector<std::pair<int32_t, int32_t>>& profile, std::string& err);
 
 }  // namespace strata::kernels::cpu

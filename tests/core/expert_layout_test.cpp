@@ -324,6 +324,85 @@ void arena() {
                                                                                   strata::kernels::cpu::expert_layout(), err);
     check(ok && err.find("is not [640, 2560, 2]") != std::string::npos, "a down tensor of another shape is refused");
 }
+// ---- 4. P4-B: the tier-ordered layout and its loader
+void tier_order() {
+    strata::kernels::cpu::NativeFmt f;
+    std::string err;
+    if (!strata::kernels::cpu::native_fmt(12, 7, 2560, 640, f, err)) {
+        check(false, "Q4_K/Q5_1 native format: " + err);
+        return;
+    }
+    const int64_t blob = (int64_t) f.bytes, NE = 4;
+    TempDir d;
+    write_text(d.path / "native_experts.txt", manifest(3, "", blob, NE));
+    check(load(d.path, 2, (int) NE, err), "the tier test's 2 x 4 layout loads" + (err.empty() ? "" : ": " + err));
+    const auto& L = strata::kernels::cpu::expert_layout();
+    // the ranking: layer 0's profiled experts 1 > 0 > 2, layer 1's 3 > 2; (0,3) and (1,0), (1,1) unprofiled
+    const std::vector<std::pair<int32_t, int32_t>> prof = {{0, 1}, {0, 0}, {0, 2}, {1, 3}, {1, 2}};
+    if (!strata::kernels::cpu::expert_layout_tier_order(prof, err)) {
+        check(false, "the tier order builds: " + err);
+        return;
+    }
+    const auto& T = strata::kernels::cpu::expert_layout();
+    check(T.blob_offset(0, 1) == L.layer_offset(0) &&
+              T.blob_offset(0, 0) == L.layer_offset(0) + (uint64_t) blob &&
+              T.blob_offset(0, 2) == L.layer_offset(0) + 2 * (uint64_t) blob &&
+              T.blob_offset(0, 3) == L.layer_offset(0) + 3 * (uint64_t) blob &&
+              T.blob_offset(1, 3) == L.layer_offset(1) &&
+              T.blob_offset(1, 2) == L.layer_offset(1) + (uint64_t) blob &&
+              T.blob_offset(1, 0) == L.layer_offset(1) + 2 * (uint64_t) blob &&
+              T.blob_offset(1, 1) == L.layer_offset(1) + 3 * (uint64_t) blob,
+          "the profiled experts lead each layer (rank order), the rest follow (id order)");
+    bool biject = true;
+    for (int64_t l = 0; l < 2 && biject; ++l) {
+        std::vector<char> seen((size_t) NE, 0);
+        for (int64_t e = 0; e < NE; ++e) {
+            const uint64_t rel = T.blob_offset(l, e) - L.layer_offset(l);
+            biject = biject && rel % (uint64_t) blob == 0 && rel < (uint64_t) NE * (uint64_t) blob &&
+                     !seen[rel / (uint64_t) blob];
+            if (biject) seen[rel / (uint64_t) blob] = 1;
+        }
+    }
+    check(biject && T.total == L.total, "every layer's experts biject its byte range; the total is unchanged");
+    {
+        std::vector<std::pair<int32_t, int32_t>> dup = prof;
+        dup.push_back({0, 1});
+        std::string e2;
+        check(!strata::kernels::cpu::expert_layout_tier_order(dup, e2) && e2.find("twice") != std::string::npos,
+              "a duplicate pair is refused");
+    }
+    {
+        const std::vector<std::pair<int32_t, int32_t>> oob = {{5, 0}};
+        std::string e2;
+        check(!strata::kernels::cpu::expert_layout_tier_order(oob, e2) && e2.find("outside") != std::string::npos,
+              "an out-of-range pair is refused");
+    }
+    // the tier loader: a canonical experts.bin must land at the tier destinations, with chunks that straddle
+    // blob borders (100 B against a ~1.4 MiB blob)
+    {
+        const uint64_t total = 2 * (uint64_t) NE * (uint64_t) blob;
+        std::vector<uint8_t> file((size_t) total, 0);
+        for (int64_t l = 0; l < 2; ++l)
+            for (int64_t e = 0; e < NE; ++e)
+                for (uint64_t j = 0; j < (uint64_t) blob; ++j)
+                    file[L.layer_offset(l) + (uint64_t) e * (uint64_t) blob + j] =
+                        (uint8_t) (l * 7 + e * 31 + j % 251);
+        const fs::path bin = d.path / "experts.bin";
+        { std::ofstream ob(bin, std::ios::binary); ob.write((const char*) file.data(), (std::streamsize) file.size()); }
+        std::vector<uint8_t> dst((size_t) total, 0xEE);
+        const std::vector<uint64_t> loff = {0, (uint64_t) NE * (uint64_t) blob};
+        const std::vector<uint64_t> lbytes = {(uint64_t) NE * (uint64_t) blob, (uint64_t) NE * (uint64_t) blob};
+        const strata::core::LoadStats st =
+            strata::core::load_experts_tier(bin.string(), dst.data(), loff, lbytes, T.expert_off, 3, 100);
+        bool exact = st.ok && st.bytes == total;
+        for (int64_t l = 0; l < 2 && exact; ++l)
+            for (int64_t e = 0; e < NE && exact; ++e)
+                exact = std::memcmp(dst.data() + T.blob_offset(l, e),
+                                    file.data() + L.layer_offset(l) + (uint64_t) e * (uint64_t) blob,
+                                    (size_t) blob) == 0;
+        check(exact, "load_experts_tier lands every expert's bytes at its tier destination (100-B chunks)");
+    }
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -350,6 +429,7 @@ int main(int argc, char** argv) {
     real_packs(argv[1]);
     columns();
     arena();
+    tier_order();
     std::printf(g_fail ? "expert_layout_test: %d FAILED\n" : "expert_layout_test: all passed\n", g_fail);
     return g_fail ? 1 : 0;
 }
