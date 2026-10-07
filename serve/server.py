@@ -232,6 +232,23 @@ def echo_requests(log_path: str, offset: int) -> None:
                 print("[strata] request prompt %s cached %s output %s prompt_read %.0f ms total %.0f ms prefill %s "
                       "tok/s decode %s tok/s" % (m["prompt"], m["reused"], m["gen"], read_ms, read_ms + gen_ms, m["pp"],
                                                  m["tg"]), flush=True)
+                # STRATA_REQUEST_LOG=<path>: the same numbers as a JSONL record (plus a memory snapshot), for
+                # the prefix-hit-rate and prompt-length distributions that rank the optimization directions
+                # (docs/reviews/OPTIMIZATION-SUGGESTIONS-2026-10-07, direction 2).  Off by default.
+                if path := os.environ.get("STRATA_REQUEST_LOG"):
+                    rec = {"ts": time.time(), "prompt": int(m["prompt"]), "cached": int(m["reused"]),
+                           "output": int(m["gen"]), "prompt_read_ms": read_ms, "total_ms": read_ms + gen_ms,
+                           "prefill_tok_s": float(m["pp"]), "decode_tok_s": float(m["tg"])}
+                    rec["prefix_hit_rate"] = rec["cached"] / rec["prompt"] if rec["prompt"] else 0.0
+                    try:
+                        for line in open("/proc/meminfo", encoding="ascii"):
+                            if line.startswith("MemAvailable:"):
+                                rec["mem_available_kb"] = int(line.split()[1])
+                                break
+                    except (OSError, ValueError):
+                        pass
+                    with open(path, "a", encoding="utf-8") as lf:
+                        lf.write(json.dumps(rec) + "\n")
 
 
 def experts_loading_words(args: list, size: str) -> str:
@@ -448,7 +465,8 @@ class StrataEngine:
             threading.Thread(target=narrate_start, args=(log, os.path.getsize(log), args, loading),
                              daemon=True).start()
             # once per log: the follower keeps reading the same (appended) log across restarts and reloads
-            if os.environ.get("STRATA_REQUEST_LINES") and os.path.abspath(log) not in _echoing:
+            if ((os.environ.get("STRATA_REQUEST_LINES") or os.environ.get("STRATA_REQUEST_LOG"))
+                    and os.path.abspath(log) not in _echoing):
                 _echoing.add(os.path.abspath(log))
                 threading.Thread(target=echo_requests, args=(log, os.path.getsize(log)), daemon=True).start()
         self.proc = subprocess.Popen([exe, "--serve", *args], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

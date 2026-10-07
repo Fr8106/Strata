@@ -3208,6 +3208,13 @@ int main(int argc, char** argv) {
         // experts, STRATA_ARENA_PIN_GIB) keeps the old slice-by-slice behaviour.
         selective_alias = o.expert_cache_fixed_pct > 0 && o.pcie_frac > 0 &&
                           pin_limit == 0 && o.shared_expert_arena.empty();
+        // The P4-A master switch (docs/reviews/P4A-REVIEW-2026-10-07 §3.3): off, the arena falls back to the
+        // wholesale pin (the P0 shape) without a recompile.
+        if (const char* pa = std::getenv("STRATA_PCIE_ALIAS"); pa != nullptr && pa[0] == '0') {
+            selective_alias = false;
+            std::fprintf(stderr, "strata generate: STRATA_PCIE_ALIAS=0: the P4-A selective registration is off, "
+                                 "the arena is pinned wholesale\n");
+        }
         if (!arena_src.open(o.pack, g.n_layers, g.n_expert, /*threads=*/6, err,
                             selective_alias ? (uint64_t) strata::core::PinnedArena::kDeferRegistration : pin_limit,
                             o.shared_expert_arena)) {
@@ -3507,6 +3514,19 @@ int main(int argc, char** argv) {
         if (!arena_src.register_pcie_alias({profile.begin(), profile.begin() + fn}, aerr))
             std::fprintf(stderr, "strata generate: %s: the PCIe share falls back to the CPU pool\n",
                          aerr.c_str());
+        else {   // the canary + fallback ladder (docs/reviews/P4A-REVIEW-2026-10-07 §3.3): a driver-state failure
+                 // degrades the registration mode instead of taking the service down
+            std::string cerr;
+            const std::string level = arena_src.canary_ladder(cerr);
+            if (level == "L0")
+                std::fprintf(stderr, "strata generate: PCIe alias canary passed (L0: Mapped zero-copy)\n");
+            else if (!level.empty())
+                std::fprintf(stderr, "strata generate: WARNING: PCIe alias degraded to %s (%s); the layers it "
+                                     "covers keep the CPU path\n", level.c_str(), cerr.c_str());
+            else
+                std::fprintf(stderr, "strata generate: WARNING: %s - the profile fill will say whether it "
+                                     "survives the pageable path\n", cerr.c_str());
+        }
         {   // same sticky probe, bracketing the registration: which phase is the last clean one
             const char* pe = cudaGetErrorString(cudaGetLastError());
             if (std::string(pe) != "no error")
@@ -3593,28 +3613,12 @@ int main(int argc, char** argv) {
                         (void) cudaGetLastError();
                         // Is the host page even alive?  A CPU read faults it in if the OS dropped it.
                         volatile uint8_t cpu_byte = b[0];
-                        // Registering the src's own page range, then copying, isolates a registration-state problem.
-                        const uint64_t pg = (uint64_t) ((uintptr_t) b & ~0xFFFULL);
-                        std::fprintf(stderr, "  src page cpu read: %u; register src range: %s\n", cpu_byte,
-                                     cudaGetErrorString(cudaHostRegister((void*) pg, 4 << 20,
-                                                                         cudaHostRegisterPortable)));
-                        (void) cudaGetLastError();
-                        std::fprintf(stderr, "  after registering src range: %s\n",
-                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
-                        (void) cudaGetLastError();
-                        std::fprintf(stderr, "  unregister src range: %s\n",
-                                     cudaGetErrorString(cudaHostUnregister((void*) pg)));
-                        (void) cudaGetLastError();
-                        std::fprintf(stderr, "  copy after unregister: %s\n",
-                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
-                        (void) cudaGetLastError();
-                        std::fprintf(stderr, "  re-register src range: %s\n",
-                                     cudaGetErrorString(cudaHostRegister((void*) pg, 4 << 20,
-                                                                         cudaHostRegisterPortable)));
-                        (void) cudaGetLastError();
-                        std::fprintf(stderr, "  copy after re-register: %s\n",
-                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
-                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  src page cpu read: %u\n", cpu_byte);
+                        // The register/unregister probes on a 4 MiB sub-window were cut (2026-10-07,
+                        // docs/reviews/P4A-REVIEW-2026-10-07 §2.2): cudaHostUnregister takes the REGISTERED
+                        // base, so a sub-window call always reports invalid argument and the re-register
+                        // always reports already-mapped - both outcomes happen in a perfectly healthy
+                        // state, and the probe could not discriminate.
                         // Bounce: the bytes through a FRESH host buffer.  If this passes while every copy
                         // straight from b fails, the driver's record for b's range is stale, not the bytes.
                         std::memcpy(nh, b, (size_t) nb);
@@ -3651,6 +3655,13 @@ int main(int argc, char** argv) {
                             }
                             probe64(b, "src");
                             probe64(b + (2 << 20), "src+2MiB");
+                            // The three-way contrast (docs/reviews/P4A-REVIEW-2026-10-07 §2.2): ① a known-good
+                            // registered run middle, ② the failed src (the per-blob world's unregistered fixed
+                            // tier), ③ the fresh pageable buffer (the bounce above).  Their rc combination says
+                            // "registration-related / arena-related / context-related".
+                            const uint64_t mid = runs[ri] + ((ri + 1 < runs.size()) ? (runs[ri + 1] - runs[ri]) / 2
+                                                                                   : (uint64_t) (1 << 20));
+                            probe64(ab + mid, "registered run middle");
                         }
                         cudaFree(nd);
                         cudaFreeHost(nh);
@@ -5653,6 +5664,17 @@ int main(int argc, char** argv) {
             std::all_of(host_res.begin(), host_res.end(), [](int32_t r) { return r >= 0; });
         if (o.adapt_every > 0 && o.adapt_swaps > 0 && !all_experts_resident)
             drive.d.usage.assign((size_t) (g.n_layers * g.n_expert), 0.0f);
+        // Usage seeding (docs/reviews/OPTIMIZATION-SUGGESTIONS-2026-10-07, direction 3): a restart's usage
+        // counts start at 0 and the early victim choice is near-arbitrary; seed them from the profile's
+        // ranking so the adaptive tier's first windows evict COLD experts - rank 0 (hottest) = 1.0, and an
+        // expert the profile never ranked stays 0 (coldest).
+        if (!profile.empty() && !drive.d.usage.empty()) {
+            for (size_t i = 0; i < profile.size(); ++i)
+                drive.d.usage[(size_t) profile[i].first * g.n_expert + (size_t) profile[i].second] =
+                    (float) ((profile.size() - i) / (double) profile.size());
+            std::fprintf(stderr, "strata serve: usage seeded from the %zu-pair profile (rank 0 = 1.0, "
+                                 "unprofiled = 0)\n", profile.size());
+        }
         // #477 --expert-profile-save: what the adaptive tier learned, kept across restarts (opt-in; off: `heat` stays
         // empty and nothing below runs).  It needs the adaptive tier's counts and the residency table.
         std::vector<double> heat;

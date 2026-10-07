@@ -3043,26 +3043,31 @@ bool ArenaExpertSource::pcie_layer(int64_t layer) const {
 // Runs align OUTWARD to page bounds: the shared edge page gets pinned with the layer, which keeps
 // `d + (blob_offset - run_off)` valid for every blob.  A run the driver refuses leaves its layer's blobs null -
 // like an unregistered slice of the capped mode, those experts just keep the CPU path.
-bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err) {
-    if (base_ == nullptr || map_ != nullptr || !blob_dev_.empty()) {
-        err = "register_pcie_alias: the arena is not in selective-registration mode";
-        return false;
+// P4-A forensics (docs/reviews/P4A-REVIEW-2026-10-07 §2.4): STRATA_PCIE_REGLOG=<path> appends one line per
+// registration attempt, so a failing run's exact sequence can be replayed offline (record-replay) instead of
+// guessed at.
+static void pcie_reg_log(uint64_t off, const void* ptr, size_t size, uint32_t flags, int rc) {
+    const char* p = std::getenv("STRATA_PCIE_REGLOG");
+    if (p == nullptr) return;
+    if (FILE* f = std::fopen(p, "a")) {
+        std::fprintf(f, "%.6f off=%llu ptr=%p size=%llu flags=%u rc=%d tid=%zx\n",
+                     (double) std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                     (unsigned long long) off, ptr, (unsigned long long) size, flags, rc,
+                     (size_t) std::hash<std::thread::id>{}(std::this_thread::get_id()));
+        std::fclose(f);
     }
+}
+
+// The per-layer registration loop: one outward page-aligned run per layer (at most `max_runs` of them, -1 =
+// all).  Runs align OUTWARD to page bounds: the shared edge page gets pinned with the layer, which keeps
+// `d + (blob_offset - run_off)` valid for every blob.  A run the driver refuses leaves its layer's blobs null
+// - like an unregistered slice of the capped mode, those experts just keep the CPU path.
+ArenaExpertSource::reg_stats ArenaExpertSource::register_layers(uint32_t flags, int max_runs) {
+    reg_stats s;
+    if (base_ == nullptr || map_ != nullptr) return s;
     const auto& lay = strata::kernels::cpu::expert_layout();
-    // host_free_ outlives this call: release() frees ONLY these named blobs' host pages.  A run the driver
-    // refused also has null blob_dev_ entries, and equating "no alias" with "fixed" would zero a live
-    // expert's only host copy when it later left VRAM - the skip set is the authority, not the alias table.
-    host_free_.assign((size_t) blobs_, 0);
-    for (const auto& s : skip)
-        if (s.first >= 0 && s.second >= 0 && s.second < n_expert_ &&
-            (uint64_t) s.first < (uint64_t) (blobs_ / n_expert_))
-            host_free_[(size_t) s.first * n_expert_ + (size_t) s.second] = 1;
-    blob_dev_.assign((size_t) blobs_, nullptr);
-    layer_alias_.assign((size_t) (blobs_ / n_expert_), 0);
-    int runs = 0, refused = 0;
-    uint64_t bytes = 0;
     const int64_t n_layers = blobs_ / n_expert_;
-    for (int64_t l = 0; l < n_layers; ++l) {
+    for (int64_t l = 0; l < n_layers && (max_runs < 0 || s.runs >= max_runs); ++l) {
         const uint64_t off = lay.layer_offset(l) & ~(uint64_t) 4095;
         const uint64_t end = (lay.layer_offset(l) + lay.blob_bytes(l) * (uint64_t) n_expert_ + 4095) &
                              ~(uint64_t) 4095;
@@ -3073,15 +3078,16 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
         // the 4628-run failure (a zero-copy mapping PER REGION, thousands of them), but 48 whole-layer
         // mappings leave the driver plenty of headroom - measured: 48 MAPPED runs register and copy clean
         // in the engine's full context (t15, 2026-10-07), while the 4628-run shape fails there.
-        if (cudaHostRegister((void*) (base_ + off), (size_t) (end - off),
-                             cudaHostRegisterPortable | cudaHostRegisterMapped) != cudaSuccess ||
+        const cudaError_t rc = cudaHostRegister((void*) (base_ + off), (size_t) (end - off), flags);
+        pcie_reg_log(off, base_ + off, (size_t) (end - off), flags, (int) rc);
+        if (rc != cudaSuccess ||
             cudaHostGetDevicePointer(&d, (void*) (base_ + off), 0) != cudaSuccess || d == nullptr) {
             (void) cudaGetLastError();
-            ++refused;
+            ++s.refused;
             continue;
         }
-        ++runs;
-        bytes += end - off;
+        ++s.runs;
+        s.bytes += end - off;
         alias_runs_.push_back(off);
         for (int64_t e = 0; e < n_expert_; ++e) {
             blob_dev_[(size_t) l * n_expert_ + (size_t) e] =
@@ -3089,7 +3095,27 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
             layer_alias_[(size_t) l] = 1;
         }
     }
-    if (runs == 0) {
+    return s;
+}
+
+bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err) {
+    if (base_ == nullptr || map_ != nullptr || !blob_dev_.empty()) {
+        err = "register_pcie_alias: the arena is not in selective-registration mode";
+        return false;
+    }
+    // host_free_ outlives this call: release() frees ONLY these named blobs' host pages.  A run the driver
+    // refused also has null blob_dev_ entries, and equating "no alias" with "fixed" would zero a live
+    // expert's only host copy when it later left VRAM - the skip set is the authority, not the alias table.
+    host_free_.assign((size_t) blobs_, 0);
+    for (const auto& s : skip)
+        if (s.first >= 0 && s.second >= 0 && s.second < n_expert_ &&
+            (uint64_t) s.first < (uint64_t) (blobs_ / n_expert_))
+            host_free_[(size_t) s.first * n_expert_ + (size_t) s.second] = 1;
+    blob_dev_.assign((size_t) blobs_, nullptr);
+    layer_alias_.assign((size_t) (blobs_ / n_expert_), 0);
+    if (const char* mr = std::getenv("STRATA_PCIE_ALIAS_MAX_RUNS")) max_runs_ = std::atoi(mr);
+    const reg_stats s = register_layers(cudaHostRegisterPortable | cudaHostRegisterMapped, max_runs_);
+    if (s.runs == 0) {
         blob_dev_.clear(); layer_alias_.clear(); alias_runs_.clear(); fixed_runs_.clear(); host_free_.clear();
         err = "register_pcie_alias: the driver refused every run";
         return false;
@@ -3097,9 +3123,88 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
     std::fprintf(stderr, "strata generate: expert arena: PCIe alias registered over %.2f GiB in %d per-layer "
                          "runs%s; the fixed tier's %zu experts stay pinned (per-layer runs can't release them "
                          "under the driver's region cap)\n",
-                 (double) bytes / 1073741824.0, runs,
-                 refused ? (", " + std::to_string(refused) + " run(s) refused").c_str() : "", skip.size());
+                 (double) s.bytes / 1073741824.0, s.runs,
+                 s.refused ? (", " + std::to_string(s.refused) + " run(s) refused").c_str() : "", skip.size());
     return true;
+}
+
+// The canary: a small HtoD + read-back at three sample points (run start, middle, near the end) of a few
+// sampled layers.  `pageable` (the ladder's L2 state) tests the SAME copies with no registration at all -
+// on this machine PageableMemoryAccess is YES (HMM), so the driver takes them without a pin.  A failure at
+// any point is a driver-state failure, not a data one: the bytes were just loaded and verified by the fill
+// path's own checks, and the CPU read of the same page succeeds.
+bool ArenaExpertSource::canary(std::string& err, bool pageable) {
+    if (base_ == nullptr || map_ != nullptr) { err = "canary: not in selective-registration mode"; return false; }
+    const auto& lay = strata::kernels::cpu::expert_layout();
+    const int64_t n_layers = blobs_ / n_expert_;
+    uint8_t* scratch = nullptr;
+    uint8_t* back = nullptr;
+    if (cudaMalloc(&scratch, 1u << 20) != cudaSuccess ||
+        cudaHostAlloc((void**) &back, 256, cudaHostAllocDefault) != cudaSuccess) {
+        (void) cudaGetLastError();
+        err = "canary: the scratch allocation failed";
+        return false;
+    }
+    const int64_t step = std::max<int64_t>(1, n_layers / 7);
+    for (int64_t l = 0; l < n_layers; l += step) {
+        const uint64_t off = lay.layer_offset(l) & ~(uint64_t) 4095;
+        const uint64_t end = (lay.layer_offset(l) + lay.blob_bytes(l) * (uint64_t) n_expert_ + 4095) &
+                             ~(uint64_t) 4095;
+        if (end <= off) continue;
+        const bool regd = !layer_alias_.empty() && layer_alias_[(size_t) l] != 0;
+        if (!regd && !pageable) continue;   // a refused layer keeps the CPU path; nothing to prove
+        const size_t n = regd ? 3 : 1;
+        for (size_t k = 0; k < n; ++k) {
+            const uint64_t p = k == 0 ? off : (k == 1 ? ((off + end) >> 1) & ~(uint64_t) 4095 : end - 65536);
+            if (cudaMemcpy(scratch, (void*) (base_ + p), 65536, cudaMemcpyHostToDevice) != cudaSuccess) {
+                (void) cudaGetLastError();
+                err = "canary: the HtoD from layer " + std::to_string(l) +
+                      (pageable ? " (unregistered) failed" : " failed");
+                cudaFree(scratch); cudaFreeHost(back);
+                return false;
+            }
+            if (cudaMemcpy(back, scratch, 256, cudaMemcpyDeviceToHost) != cudaSuccess ||
+                std::memcmp(back, base_ + p, 256) != 0) {
+                (void) cudaGetLastError();
+                err = "canary: the read-back from layer " + std::to_string(l) + " mismatches";
+                cudaFree(scratch); cudaFreeHost(back);
+                return false;
+            }
+        }
+    }
+    cudaFree(scratch);
+    cudaFreeHost(back);
+    return true;
+}
+
+// The fallback ladder (docs/reviews/P4A-REVIEW-2026-10-07 §3.3): a driver-state failure must degrade the
+// service, not take it down.  L0 is the as-registered state (Mapped zero-copy); L1 re-registers WITHOUT
+// Mapped (the fill's copies stay pinned, the GPU's direct reads are lost - those layers keep the CPU path);
+// L2 unregisters everything (pageable HMM copies, every expert on the CPU path, P1-like).
+std::string ArenaExpertSource::canary_ladder(std::string& err) {
+    if (base_ == nullptr || map_ != nullptr || blob_dev_.empty()) {
+        err = "canary_ladder: the arena is not in selective-registration mode";
+        return "";
+    }
+    if (canary(err)) return "L0";
+    for (uint64_t off : alias_runs_) {
+        cudaHostUnregister((void*) (base_ + off));
+        (void) cudaGetLastError();
+    }
+    alias_runs_.clear();
+    std::fill(layer_alias_.begin(), layer_alias_.end(), (uint8_t) 0);
+    std::fill(blob_dev_.begin(), blob_dev_.end(), (const uint8_t*) nullptr);   // stale L0 device pointers
+    if (register_layers(cudaHostRegisterPortable, max_runs_).runs > 0 && canary(err)) return "L1";
+    for (uint64_t off : alias_runs_) {
+        cudaHostUnregister((void*) (base_ + off));
+        (void) cudaGetLastError();
+    }
+    alias_runs_.clear();
+    std::fill(blob_dev_.begin(), blob_dev_.end(), (const uint8_t*) nullptr);
+    std::fill(layer_alias_.begin(), layer_alias_.end(), (uint8_t) 0);
+    if (canary(err, true)) return "L2";
+    err = "the canary failed at every level (L0/L1/L2)";
+    return "";
 }
 
 const uint8_t* ArenaExpertSource::blob(int64_t layer, int64_t expert) {

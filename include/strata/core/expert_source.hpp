@@ -692,7 +692,17 @@ public:
     /// named in `skip` - the fixed tier is pinned in VRAM for the whole session and nothing reads its host
     /// bytes after the profile fill, so registering it would pin bytes nothing ever touches.  The rest keeps
     /// the verify window's PCIe alias.  `pinned()` and `device_alias()` answer per expert from the result.
+    /// `STRATA_PCIE_ALIAS_MAX_RUNS=N` caps the number of per-layer runs registered (a bisection knob for the
+    /// driver's region budget).  With `STRATA_PCIE_REGLOG=<path>` set, every registration attempt is appended
+    /// to that file (offset/ptr/size/flags/rc/tid) so a failing run's sequence can be replayed offline.
     bool register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err);
+    /// Post-registration self-check (docs/reviews/P4A-REVIEW-2026-10-07 §3.3): a small HtoD + read-back at a
+    /// few sampled layers.  If it fails, walks the fallback ladder - L1: re-register without Mapped (Portable
+    /// only, the fill's copies stay pinned but the zero-copy GPU reads are lost, those layers keep the CPU
+    /// path); L2: no registration at all (pageable copies, every expert on the CPU path, P1-like).  Returns
+    /// "L0"/"L1"/"L2" for the level whose canary passed, or "" if even L2's canary fails (the fill will then
+    /// fail with its full diagnostics - the ladder degrades the mode, it does not paper over a dead driver).
+    std::string canary_ladder(std::string& err);
 
     /// What backing was obtained and why, for the startup print.  "The engine adapts to the machine it is on" is
     /// only true if the engine says what it got.
@@ -719,6 +729,10 @@ private:
                                                           ///< (start, length) - registered so the fill can read them,
                                                           ///< released by release_fixed_tier()
     std::vector<uint8_t> host_free_;          ///< selective mode: 1 = the fixed tier's blob, host copy discardable
+    struct reg_stats { int runs = 0, refused = 0; uint64_t bytes = 0; };
+    reg_stats register_layers(uint32_t flags, int max_runs);   ///< the per-layer registration loop (canary ladder reuses it)
+    bool canary(std::string& err, bool pageable = false);      ///< small HtoD + read-back at sampled layers
+    int max_runs_ = -1;                                        ///< STRATA_PCIE_ALIAS_MAX_RUNS, -1 = all layers
     uint64_t slice_bytes_ = 0;
     const uint8_t* base_ = nullptr;
     int64_t blobs_ = 0;
