@@ -384,13 +384,12 @@ bool ExpertCache::grow(int64_t want_bytes, std::string& err) {
 #endif
 }
 
-#if defined(STRATA_USE_HIP)
 bool ExpertCache::ensure_blocking_staging(std::size_t bytes, std::string& err) {
     if (bytes <= blocking_staging_bytes_) return true;
     void* next = nullptr;
     const cudaError_t status = cudaHostAlloc(&next, bytes, cudaHostAllocDefault);
     if (status != cudaSuccess) {
-        err = std::string("ExpertCache: HIP blocking staging allocation: ") + cudaGetErrorString(status);
+        err = std::string("ExpertCache: blocking staging allocation: ") + cudaGetErrorString(status);
         return false;
     }
     if (blocking_staging_) (void) cudaFreeHost(blocking_staging_);
@@ -398,7 +397,6 @@ bool ExpertCache::ensure_blocking_staging(std::size_t bytes, std::string& err) {
     blocking_staging_bytes_ = bytes;
     return true;
 }
-#endif
 
 bool ExpertCache::open(int64_t n_slots, int64_t n_layers, int64_t n_expert, int64_t blob_bytes,
                        std::string& err) {
@@ -459,12 +457,11 @@ bool ExpertCache::open(int64_t n_slots, int64_t n_layers, int64_t n_expert, int6
     n_layers_ = n_layers;
     n_expert_ = n_expert;
     blob_ = blob_bytes;
-#if defined(STRATA_USE_HIP)
+    // Pre-sized here (single-threaded) so the fill threads' lazy `ensure_blocking_staging` is a no-op.
     if (!ensure_blocking_staging((std::size_t) blob_, err)) {
         close();
         return false;
     }
-#endif
     next_free_ = 0;
     fills_ = 0;
     admitted_ = 0;
@@ -495,12 +492,10 @@ bool ExpertCache::open_sized(const std::vector<int64_t>& slot_bytes, int64_t n_l
     live_slots_ = slots_;
     blob_ = mx;
     off_ = std::move(off);
-#if defined(STRATA_USE_HIP)
     if (!ensure_blocking_staging((std::size_t) blob_, err)) {
         close();
         return false;
     }
-#endif
     // #369: each layer's cursor at the bottom of its own range, as open() seeds it - open() above ran on byte-sized
     // "slots", so its seeds are not slot indices
     layer_next_.assign((size_t) (n_layers > 0 ? n_layers : 0), 0);
@@ -513,11 +508,9 @@ bool ExpertCache::open_sized(const std::vector<int64_t>& slot_bytes, int64_t n_l
 }
 
 void ExpertCache::close() {
-#if defined(STRATA_USE_HIP)
     if (blocking_staging_) (void) cudaFreeHost(blocking_staging_);
     blocking_staging_ = nullptr;
     blocking_staging_bytes_ = 0;
-#endif
     off_.clear();
     if (!segs_.empty()) {
         release_segmented();
@@ -639,7 +632,19 @@ bool ExpertCache::fill_slot_blocking(int32_t slot, const uint8_t* host_blob, std
     std::memcpy(blocking_staging_, host_blob, n);
     const cudaError_t e = cudaMemcpy(dst, blocking_staging_, n, cudaMemcpyHostToDevice);
 #else
-    const cudaError_t e = cudaMemcpy(dst, host_blob, n, cudaMemcpyHostToDevice);
+    // A zero-copy HtoD from a Mapped-registered source is refused (cudaErrorInvalidValue) when it
+    // straddles two adjacent registrations: in the tier-ordered arena the fixed/non-fixed boundary is
+    // not page-aligned, so the first non-fixed expert's blob starts inside the fixed run (t16: every
+    // in-run copy passes, every cross-run copy fails).  Retry through the pinned staging buffer - a
+    // CPU memcpy has no DMA region constraint.  ~48 experts out of 24576 cross the boundary; the rest
+    // keep the direct zero-copy path.
+    cudaError_t e = cudaMemcpy(dst, host_blob, n, cudaMemcpyHostToDevice);
+    if (e == cudaErrorInvalidValue) {
+        if (!ensure_blocking_staging(n, err))
+            return false;
+        std::memcpy(blocking_staging_, host_blob, n);
+        e = cudaMemcpy(dst, blocking_staging_, n, cudaMemcpyHostToDevice);
+    }
 #endif
     if (e != cudaSuccess) {
         // Report a DIFFERENT pending error too: a sticky fault from an earlier call lies about where it
@@ -662,7 +667,14 @@ bool ExpertCache::fill_slot_queued(int32_t slot, const uint8_t* host_blob, std::
                              : "ExpertCache::fill_slot_queued: the host blob is null";
         return false;
     }
-    const cudaError_t e = cudaMemcpyAsync(dst, host_blob, n, cudaMemcpyHostToDevice, (cudaStream_t) 0);
+    // See fill_slot_blocking: a cross-run zero-copy source is refused, bounce through the staging buffer.
+    cudaError_t e = cudaMemcpyAsync(dst, host_blob, n, cudaMemcpyHostToDevice, (cudaStream_t) 0);
+    if (e == cudaErrorInvalidValue) {
+        if (!ensure_blocking_staging(n, err))
+            return false;
+        std::memcpy(blocking_staging_, host_blob, n);
+        e = cudaMemcpyAsync(dst, blocking_staging_, n, cudaMemcpyHostToDevice, (cudaStream_t) 0);
+    }
     if (e != cudaSuccess) {
         err = std::string("ExpertCache::fill_slot_queued: ") + cudaGetErrorString(e);
         return false;
