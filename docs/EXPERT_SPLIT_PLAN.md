@@ -282,8 +282,12 @@ strata generate: pre-filled 12045 of 12045 slots from the profile
 - 现象：别名注册成功（日志 `PCIe alias registered over 35.66 GiB in 4424 runs`），紧接 `the profile fill failed at pair 0: ExpertCache::fill_slot_blocking: invalid argument` → 引擎 exit 1，server 轮询 "still starting" 至 ~255 s 截止（`Restart=no`，服务失败）。三次尝试（10:42/10:49/10:52）完全一致 → 确定性。
 - 当时显存状态：缓存 22.39 GiB 分出后 free < 1 GiB。对照 t7 实验（Ninfer 占 30.8/32.6 GiB 时）：`cudaHostRegister(...Mapped)` 本身即 `invalid argument`，且 sticky error 污染其后所有 CUDA 调用。
 - 根因方向：P0 是**一整块** 46.84 GiB MAPPED 注册（同显存水位下成功）；P4-A 是 **4424 个小段**（均 ~8.5 MiB）`cudaHostRegisterMapped`。MAPPED 每段建一个 device 侧 zero-copy 映射，数千段 + 显存近满 → 驱动资源耗尽，其后首个 HtoD `cudaMemcpy` 报 invalid argument（pair 0 属固定区、源指针未注册，普通 pageable 拷贝也挂了 → 指向"注册段的 device 侧资源"而非页本身）。
-- 修复（`engine/strata`，`engine/strata.pre-p4b` 为修复前备份）：4424 段注册去掉 `cudaHostRegisterMapped`，只留 `cudaHostRegisterPortable` 纯 pin——GPU 经 PCIe 读页只需页稳定，UVA 下 host 指针即 GPU 指针，`cudaHostGetDevicePointer` 照旧返回可用指针；每段 device 映射的开销随之消失。另在 `fill_slot_blocking` 失败时报告 pending error（sticky 与本次错误分列，`pinned.cu` gr_read 陷阱的同类坑）。
-- 待验证（需 GPU 空闲窗口）：重启后看 `PCIe alias registered over ~35.6 GiB` 且无 fill 失败 → 跑 A/B。若仍挂，后备：段数再降（按层 48 段）或整块注册（=P0 内存画像）。
+- 修复 v1（`engine/strata.pre-p4b` 为修复前备份）：4424 段注册去掉 `cudaHostRegisterMapped`，只留 `cudaHostRegisterPortable` 纯 pin。另在 `fill_slot_blocking` 失败时报告 pending error（sticky 与本次错误分列，`pinned.cu` gr_read 陷阱的同类坑）。
+- **纯 pin 未解决**（commit 4255b29 后手动启动与 6 配置变体 bisection 全挂，确定性不变）。排除矩阵（全部实测）：配置子系统（vision/mtp/ple/kv-resident/conversation-cache 逐个去掉，fill 照挂）；先前异步 fault（fill 前 `cudaDeviceSynchronize` 探针干净）；sticky error（探针干净）；THP（`STRATA_NO_LARGEPAGES=1` 照挂）；注册段数量本身（8192 段阶梯在干净上下文通过）；总 pin 字节（t13：~44 GiB 总 pin + 36 GiB 设备上下文通过）；设备上下文状态（t14：512 小分配 + 流 + kernel + 4628 段通过）。
+- 引擎内取证（fill 失败诊断块）：从已注册 run 内的 src 做 HtoD，**任何**大小（含 64 KiB）都报全新 `invalid argument`；CPU 读该页正常；dst 正常；把同一批字节 memcpy 到**全新** host buffer 再 HtoD 通过（bounce）；4 MiB 窗口 `cudaHostUnregister` 报 `invalid argument`、再注册报 `already mapped`。结论：驱动对 4628 段注册的 user-memory 记录在引擎上下文中坏掉了（CPU 可见、拷贝引擎不可用），字节与上下文本身都健康。
+- 复现形状（t15，引擎完整上下文：24 GiB cache + 512 小分配 + 流 + kernel + 9.14 GiB 预 pin + 26.8 GiB PLE 映射 + 256 MiB PCIe 探针）：**单段 46.84 GiB MAPPED（m1）、48 层 MAPPED（m48）、单段纯 pin（p1）全部注册 + 拷贝通过**。
+- **最终修复**（`register_pcie_alias`）：注册粒度从逐 blob run（4628 段，~8 MiB/段）降为**每层一段、共 48 段、整层 MAPPED**（`cudaHostRegisterPortable | cudaHostRegisterMapped`）。48 个 zero-copy 映射离驱动资源上限很远（t15 实测）；Mapped 是 GPU 直接经 PCIe 读专家所必需的 device 侧映射（纯 pin 只帮到 `cudaMemcpy`，不帮 kernel 直接解引用）。代价：固定区（~11.2 GiB）随整层一起 pin 住、会话内不归还——`release()`/`release_fixed_tier()` 对已注册 blob 是 no-op（对 pinned 页 DONTNEED 本就无效），遥测诚实报 0。
+- 待验证（需 GPU 空闲窗口；2026-10-07 下午窗口被 swift15 容器占显存，引擎 weight arena OOM 未跑到注册）：`PCIe alias registered over ~46.8 GiB in 48 per-layer runs` 且无 fill 失败 → 启动 strata.service、跑 A/B（§9.5 预期指标）。
 
 ## 10. 明确不做（后续单独立项）
 
