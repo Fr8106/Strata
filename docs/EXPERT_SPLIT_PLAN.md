@@ -329,6 +329,12 @@ A/B 的 3.1 GiB 峰值低于 8 GiB 安全线，用户裁定立项方案 B（专�
 - **未过项：canary L0 失败，降级 L2**（`WARNING: PCIe alias degraded to L2 (canary: the HtoD from layer 6 failed)`）。同上下文 48-run 形状两次 L0 通过（19:26/19:33），96-run 形状挂——形状相关的驱动状态差异。后果：非固定区走 pageable HMM（~17 GB/s = 注册路径 28.4 的 60%），32K prefill 2866–2902 tok/s（A/B 4468 的 ~64%；1K 418–445）。
 - canary 失败信息已补 `cudaGetErrorString(rc)`（下次窗口可直接读出驱动拒因）；取证窗口（`STRATA_PCIE_REGLOG` + `CUDA_LOG_FILE` + dmesg + 形状复现）待用户放行。
 
+**根因与修复（2026-10-07 晚，t16 独立复现定因，无需停 LLM）**：
+- 取证窗口确认 L0 失败**可复现**（2/2 次 layer 6），驱动日志对注册/canary 全程静默（只有 shutdown 的 713 双重注销）。
+- `tools/repro/t16.cu`（reglog 几何解析 + 子集注册 + 引擎同款 canary 采样，与 swift15 共存，只 pin 前缀层）逐层定位：**64 KiB 零拷贝 HtoD 的源一旦跨两个相邻 Mapped 注册的边界，驱动拒 `invalid argument`；完全在单个 run 内则必过**。canary 的 k=0 采样点用 `floor4k(固定区尾)`，落在固定 run 的**最后一页**，64K 拷贝越进非固定 run → 失败（48-run 形状无 run 内边界，故从未触发；L0/L7/L9/L10 "通过"恰是边界 4K 对齐、k=0 落在非固定 run 起点的层）。fill 不受影响（逐专家 blob 拷贝，tier 序保证 blob 不跨边界，窗口里 11797/11797 全成）。
+- 修复（3 处）：① canary k=0 采样改 `ceil4k`（非固定 run 真起点，`register_tier_runs` 同款对齐）；② `release_fixed_tier` 把固定 run 从 `alias_runs_` 摘除；③ 梯子/close 不再二次注销固定 run（消除 shutdown 的 713）。t16 验证：修后单层与 49-run 累计形状全部采样点通过。
+- **20:49 验证窗口失败（环境性）**：引擎 720 s 零日志（46.84 GiB pin 在 ~39 GiB 可用内存下爬 swap），pkill 后残留 4328 MiB 孤儿 VRAM，脚本硬拉 swift15 → LLM 起不来 → 用户重启机器。脚本已加固：kill -9 兜底 + VRAM 未释放时**不**拉容器（ABORT 提示手动清理）。引擎内 L0 验证待下一窗口。
+
 ## 10. 明确不做（后续单独立项）
 
 - 100% 显存专家释放 RAM（自适应换入变磁盘读）

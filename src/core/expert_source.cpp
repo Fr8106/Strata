@@ -2924,9 +2924,10 @@ void ArenaExpertSource::close() {
     // selective mode owns its registrations: the arena never saw them (kDeferRegistration), so it is this
     // class that hands them back - PinnedArena's own unregister loop would otherwise fire at nothing.
     if (base_ != nullptr) {
+        // every registered run (fixed and non-fixed) lives in alias_runs_: release_fixed_tier() and the
+        // canary ladder drop the fixed entries from it when they unregister them, so this is a single
+        // pass with no double-unregister (CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED)
         for (uint64_t off : alias_runs_) { cudaHostUnregister((void*) ((uint8_t*) base_ + off)); (void) cudaGetLastError(); }
-        for (const auto& r : fixed_runs_)
-            if (r.second > 0) { cudaHostUnregister((void*) ((uint8_t*) base_ + r.first)); (void) cudaGetLastError(); }
     }
     alias_runs_.clear();
     fixed_runs_.clear();
@@ -3018,6 +3019,9 @@ uint64_t ArenaExpertSource::release_fixed_tier() {
         const uint64_t fe = (r.first + r.second) & ~(uint64_t) 4095;
         if (fe > fs && madvise((uint8_t*) base_ + fs, (size_t) (fe - fs), MADV_DONTNEED) == 0)
             released += fe - fs;
+        // the fixed run also lives in alias_runs_ (register_tier_runs pushes both kinds): drop it there, or
+        // close() unregisters it a second time (CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED at shutdown)
+        alias_runs_.erase(std::remove(alias_runs_.begin(), alias_runs_.end(), ufs), alias_runs_.end());
     }
     fixed_runs_.clear();
     fixed_released_ = true;
@@ -3227,7 +3231,13 @@ bool ArenaExpertSource::canary(std::string& err, bool pageable) {
         const uint64_t off0 = lay.layer_offset(l);
         const uint64_t tot = lay.blob_bytes(l) * (uint64_t) n_expert_;
         const uint64_t nfix = (fixed_cnt_.empty() ? 0 : (uint64_t) fixed_cnt_[(size_t) l]) * lay.blob_bytes(l);
-        const uint64_t off = ((nfix > 0 && nfix < tot ? off0 + nfix : off0) & ~(uint64_t) 4095);
+        // Sample the NON-FIXED run's start (ceil4k of the fixed end), never its last page: a zero-copy HtoD
+        // whose 64 KiB copy straddles two adjacent Mapped runs is refused by the driver (invalid argument) -
+        // t16 shows the copy from a fixed run's last page into the non-fixed run's first page fails while
+        // every in-run copy succeeds.  A floored boundary (the pre-B whole-layer shape) lands on the run's
+        // start, as before.
+        const uint64_t off = (nfix > 0 && nfix < tot) ? ((off0 + nfix + 4095) & ~(uint64_t) 4095)
+                                                     : (off0 & ~(uint64_t) 4095);
         const uint64_t end = (off0 + tot + 4095) & ~(uint64_t) 4095;
         if (end <= off) continue;
         const bool regd = !layer_alias_.empty() && layer_alias_[(size_t) l] != 0;
@@ -3269,11 +3279,14 @@ std::string ArenaExpertSource::canary_ladder(std::string& err) {
         return "";
     }
     if (canary(err)) return "L0";
+    // every run in alias_runs_ (fixed and non-fixed) goes: clear fixed_runs_ too, or close() unregisters
+    // the fixed runs a second time
     for (uint64_t off : alias_runs_) {
         cudaHostUnregister((void*) (base_ + off));
         (void) cudaGetLastError();
     }
     alias_runs_.clear();
+    fixed_runs_.clear();
     std::fill(layer_alias_.begin(), layer_alias_.end(), (uint8_t) 0);
     std::fill(blob_dev_.begin(), blob_dev_.end(), (const uint8_t*) nullptr);   // stale L0 device pointers
     if (register_tier_runs(cudaHostRegisterPortable, max_runs_, true).runs > 0 && canary(err)) return "L1";
@@ -3282,6 +3295,7 @@ std::string ArenaExpertSource::canary_ladder(std::string& err) {
         (void) cudaGetLastError();
     }
     alias_runs_.clear();
+    fixed_runs_.clear();
     std::fill(blob_dev_.begin(), blob_dev_.end(), (const uint8_t*) nullptr);
     std::fill(layer_alias_.begin(), layer_alias_.end(), (uint8_t) 0);
     if (canary(err, true)) return "L2";

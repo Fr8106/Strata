@@ -136,10 +136,29 @@ for i in $(seq 1 60); do
     [ "$used" -lt 1024 ] && break
     sleep 2
 done
+if [ "$used" -ge 1024 ]; then
+    # a SIGTERM-resistant child (or a forked vision process) is holding the context: escalate, then re-check
+    log "VRAM not released after SIGTERM (used=${used} MiB) - kill -9 fallback"
+    pkill -9 -f 'serve/server.py --engine strata' 2>/dev/null
+    pkill -9 -f 'engine/strata' 2>/dev/null
+    pkill -9 -f 'strata-vision' 2>/dev/null
+    for i in $(seq 1 60); do
+        used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+        [ "$used" -lt 1024 ] && break
+        sleep 2
+    done
+fi
 log "engine stopped, VRAM used=${used} MiB"
 
 # 9) restore the LLM (the standing rule's explicit step)
 trap - EXIT
+if [ "$used" -ge 1024 ]; then
+    # an orphaned CUDA context would leave the LLM without VRAM (it cannot start on top of 4 GiB of
+    # leftovers on this 32 GB card): leave it for manual cleanup instead of stacking a broken LLM on it
+    log "ABORT: orphan VRAM ${used} MiB - NOT starting the LLM; find the holder with nvidia-smi and kill it"
+    sudo systemctl stop llm-deadman.timer llm-deadman.service >>"$RES" 2>&1
+    exit 1
+fi
 docker start "$CTR" >>"$RES" 2>&1
 log "swift15 started (explicit)"
 for i in $(seq 1 90); do
