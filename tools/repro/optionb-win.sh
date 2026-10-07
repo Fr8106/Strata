@@ -45,7 +45,13 @@ if [ "$used" -ge 1024 ]; then
 fi
 log "VRAM released (used=${used} MiB)"
 
-# 4) deploy the P4-B binary - idempotent
+# 4) free the page cache: the 46.84 GiB pin needs real RAM headroom (the 20:49 window crawled swap for
+# 720 s with ~39 GiB available; dropping the ~19 GiB cache puts ~58 GiB under the pin)
+sync
+sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' 2>>"$RES"
+log "page cache dropped (cold start, $(grep MemAvailable /proc/meminfo | awk '{print $2/1048576" GiB"}')"
+
+# 5) deploy the P4-B binary - idempotent
 cp build/strata engine/strata
 log "deployed build/strata -> engine/strata"
 
@@ -161,9 +167,10 @@ if [ "$used" -ge 1024 ]; then
 fi
 docker start "$CTR" >>"$RES" 2>&1
 log "swift15 started (explicit)"
+# the container defines no docker healthcheck (inspect says n/a): probe 8088 directly (401 = up, needs the key)
 for i in $(seq 1 90); do
-    st=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' "$CTR" 2>/dev/null)
-    [ "$st" = "healthy" ] && { log "8088 healthy"; break; }
+    code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088/" 2>/dev/null)
+    [ "$code" != "000" ] && { log "8088 answering (HTTP $code)"; break; }
     sleep 2
 done
 sudo systemctl stop llm-deadman.timer llm-deadman.service >>"$RES" 2>&1

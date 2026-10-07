@@ -120,9 +120,10 @@ if [ "$used" -ge 1024 ]; then
 fi
 docker start "$CTR" >>"$RES" 2>&1
 log "swift15 started (explicit)"
+# the container defines no docker healthcheck (inspect says n/a): probe 8088 directly (401 = up, needs the key)
 for i in $(seq 1 90); do
-    st=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' "$CTR" 2>/dev/null)
-    [ "$st" = "healthy" ] && { log "8088 healthy"; break; }
+    code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8088/" 2>/dev/null)
+    [ "$code" != "000" ] && { log "8088 answering (HTTP $code)"; break; }
     sleep 2
 done
 sudo systemctl stop llm-deadman.timer llm-deadman.service >>"$RES" 2>&1
