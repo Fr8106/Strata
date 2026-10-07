@@ -618,6 +618,17 @@ bool ExpertCache::fill_slot_blocking(int32_t slot, const uint8_t* host_blob, std
         err = "ExpertCache::fill_slot_blocking: the host blob is null";
         return false;
     }
+    {   // Consume a sticky fault BEFORE the copy: a stale error makes the copy report a fault that
+        // happened elsewhere (the arena-registration trap in pinned.cu), and its own return then
+        // overwrites the evidence.  Printed once per distinct fault - the fill runs thousands of times.
+        static const char* last_sticky = "no error";
+        const char* pe = cudaGetErrorString(cudaGetLastError());
+        if (std::string(pe) != "no error" && pe != last_sticky) {
+            last_sticky = pe;
+            std::fprintf(stderr, "strata generate: fill_slot_blocking: stale CUDA error before the copy: %s\n",
+                         pe);
+        }
+    }
 #if defined(STRATA_USE_HIP)
     // Bound HIP's pageable-source staging to one expert instead of repeatedly
     // registering regions of the mmap. The blocking copy completes before reuse.

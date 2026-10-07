@@ -2911,11 +2911,12 @@ bool ArenaExpertSource::open(const std::string& pack_dir, int64_t n_layers, int6
 void ArenaExpertSource::close() {
     // selective mode owns its registrations: the arena never saw them (kDeferRegistration), so it is this
     // class that hands them back - PinnedArena's own unregister loop would otherwise fire at nothing.
-    if (base_ != nullptr && !alias_runs_.empty()) {
-        for (uint64_t off : alias_runs_) cudaHostUnregister((void*) ((uint8_t*) base_ + off));
-        (void) cudaGetLastError();
+    if (base_ != nullptr) {
+        for (uint64_t off : alias_runs_) { cudaHostUnregister((void*) ((uint8_t*) base_ + off)); (void) cudaGetLastError(); }
+        for (const auto& r : fixed_runs_) { cudaHostUnregister((void*) ((uint8_t*) base_ + r.first)); (void) cudaGetLastError(); }
     }
     alias_runs_.clear();
+    fixed_runs_.clear();
     host_free_.clear();
     blob_dev_.clear();
     layer_alias_.clear();
@@ -2959,12 +2960,12 @@ uint64_t ArenaExpertSource::release(int64_t layer, int64_t expert) {
     if (layer < 0 || expert < 0 || expert >= n_expert_) return 0;
     const uint8_t* m = (const uint8_t*) map_;
     if (m == nullptr) {
-        // Selective registration (register_pcie_alias): ONLY the blobs the caller named as fixed (host_free_)
-        // may be dropped - they sit in VRAM for the whole session and nothing reads their host bytes after
-        // the profile fill, so DONTNEED on their anonymous pages really frees them (unmapped zero pages, no
-        // re-read: every later reader goes through the miss set, which never contains a fixed expert).
-        // A blob that merely LACKS an alias (the driver refused its run) must keep its pages: it is an
-        // ordinary expert that the CPU pool will read again if it ever leaves VRAM.
+        // Per-layer registration (register_pcie_alias) pins the WHOLE layer - the fixed tier included - so
+        // nothing in it may be dropped: a DONTNEED on a pinned page frees nothing, and reporting it as freed
+        // would lie.  Only a layer whose run the driver refused (null blob_dev_) has loose pages, and those
+        // are ordinary experts the CPU pool reads again - keep them too.  Selective mode therefore releases
+        // nothing; release_fixed_tier() is the no-op that says so.
+        if (!blob_dev_.empty()) return 0;
         const uint64_t g = (uint64_t) layer * n_expert_ + (uint64_t) expert;
         if (host_free_.empty() || base_ == nullptr || g >= host_free_.size() ||
             host_free_[(size_t) g] == 0) return 0;
@@ -2976,6 +2977,27 @@ uint64_t ArenaExpertSource::release(int64_t layer, int64_t expert) {
     if (end <= off) return 0;
     if (madvise((uint8_t*) m + off, (size_t) (end - off), MADV_DONTNEED) != 0) return 0;
     return end - off;
+#endif
+}
+
+// P4-A: the fixed tier was registered so the profile fill could copy it over a live source.  Nothing reads those
+// host bytes after the fill (every later reader goes through the miss set, which never contains a fixed expert),
+// so hand the whole tier back: unregister each fixed run (releases the pin) and DONTNEED its pages.  A fixed blob
+// left with a stale device alias would read freed memory over the PCIe path, so its alias is dropped too.
+uint64_t ArenaExpertSource::release_fixed_tier() {
+#if defined(_WIN32)
+    return 0;
+#else
+    uint64_t released = 0;
+    for (const auto& r : fixed_runs_) {
+        cudaHostUnregister((void*) ((uint8_t*) base_ + r.first));
+        (void) cudaGetLastError();
+        if (madvise((uint8_t*) base_ + r.first, r.second, MADV_DONTNEED) == 0) released += r.second;
+    }
+    fixed_runs_.clear();
+    for (size_t k = 0; k < host_free_.size(); ++k)
+        if (host_free_[k] && k < blob_dev_.size()) blob_dev_[k] = nullptr;
+    return released;
 #endif
 }
 
@@ -3009,13 +3031,18 @@ bool ArenaExpertSource::pcie_layer(int64_t layer) const {
 }
 
 // The fixed-tier split (docs/EXPERT_SPLIT_PLAN.md P4).  The caller defers the arena's registration
-// (PinnedArena::kDeferRegistration); it happens here, run by run: blobs in `skip` - the fixed tier's, pinned
-// in VRAM for the whole session and never read from host bytes after the profile fill - are left unregistered,
-// every maximal run of the rest is registered, and each blob keeps its own device pointer.  Runs align
-// OUTWARD to page bounds: the shared edge page of a skipped neighbour gets pinned with it, which costs one
-// page and keeps `d + (blob_offset - run_off)` valid for every blob of the run.  Two runs never overlap:
-// a native blob is megabytes, wider than any two pages of slack.  A run the driver refuses leaves its blobs
-// null - like an unregistered slice of the capped mode, those experts just keep the CPU path.
+// (PinnedArena::kDeferRegistration); it happens here.  The arena is registered ONE RUN PER LAYER (48 runs), the
+// whole layer each - NOT per-expert: the driver caps the number of registered user-memory regions at a few
+// thousand (measured ~5300 on this box: 4628 runs register clean, 9256 get ~3900 refused), and per-expert runs
+// for a 24576-expert arena are ~9000 of them.  A per-layer run covers every expert of the layer - the fixed
+// tier's included, which the profile fill reads over a live copy (an HtoD from an UNregistered, reclaimable
+// arena region dies "invalid argument" under this machine's memory pressure, while the same copy from a
+// registered one succeeds - 2026-10-07: the fill failed at pair 0, a fixed-tier expert, in a run the driver
+// had refused).  The cost: the fixed tier stays pinned for the session (its ~12 GiB is not handed back), which
+// is the price of staying under the driver's region cap; release_fixed_tier() is a no-op in this scheme.
+// Runs align OUTWARD to page bounds: the shared edge page gets pinned with the layer, which keeps
+// `d + (blob_offset - run_off)` valid for every blob.  A run the driver refuses leaves its layer's blobs null -
+// like an unregistered slice of the capped mode, those experts just keep the CPU path.
 bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err) {
     if (base_ == nullptr || map_ != nullptr || !blob_dev_.empty()) {
         err = "register_pcie_alias: the arena is not in selective-registration mode";
@@ -3034,24 +3061,20 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
     layer_alias_.assign((size_t) (blobs_ / n_expert_), 0);
     int runs = 0, refused = 0;
     uint64_t bytes = 0;
-    int64_t g = 0;
-    while (g < blobs_) {
-        if (host_free_[(size_t) g]) { ++g; continue; }
-        const int64_t from = g;
-        while (g < blobs_ && !host_free_[(size_t) g]) ++g;
-        const int64_t last = g - 1;
-        const uint64_t off = (uint64_t) lay.blob_offset(from / n_expert_, from % n_expert_) & ~(uint64_t) 4095;
-        const uint64_t end = ((uint64_t) lay.blob_offset(last / n_expert_, last % n_expert_) +
-                              lay.blob_bytes(last / n_expert_) + 4095) & ~(uint64_t) 4095;
+    const int64_t n_layers = blobs_ / n_expert_;
+    for (int64_t l = 0; l < n_layers; ++l) {
+        const uint64_t off = lay.layer_offset(l) & ~(uint64_t) 4095;
+        const uint64_t end = (lay.layer_offset(l) + lay.blob_bytes(l) * (uint64_t) n_expert_ + 4095) &
+                             ~(uint64_t) 4095;
         if (end <= off) continue;
         void* d = nullptr;
-        // Plain pin, NOT cudaHostRegisterMapped: a MAPPED registration builds a device-side zero-copy
-        // mapping PER REGION, and with thousands of regions plus a nearly-full VRAM the driver ran out of
-        // that resource and the next HtoD copy died "invalid argument" (2026-10-07 P4-A startup failure).
-        // The pin alone is what the GPU needs: stable pages for its PCIe reads; on UVA the host pointer is
-        // already the GPU's pointer.
+        // Mapped: the GPU's direct PCIe reads need a device-side zero-copy mapping, which only a Mapped
+        // registration builds (a plain pin helps cudaMemcpy only).  The Mapped flag was first blamed for
+        // the 4628-run failure (a zero-copy mapping PER REGION, thousands of them), but 48 whole-layer
+        // mappings leave the driver plenty of headroom - measured: 48 MAPPED runs register and copy clean
+        // in the engine's full context (t15, 2026-10-07), while the 4628-run shape fails there.
         if (cudaHostRegister((void*) (base_ + off), (size_t) (end - off),
-                             cudaHostRegisterPortable) != cudaSuccess ||
+                             cudaHostRegisterPortable | cudaHostRegisterMapped) != cudaSuccess ||
             cudaHostGetDevicePointer(&d, (void*) (base_ + off), 0) != cudaSuccess || d == nullptr) {
             (void) cudaGetLastError();
             ++refused;
@@ -3060,19 +3083,20 @@ bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,
         ++runs;
         bytes += end - off;
         alias_runs_.push_back(off);
-        for (int64_t k = from; k <= last; ++k) {
-            blob_dev_[(size_t) k] = (const uint8_t*) d +
-                ((uint64_t) lay.blob_offset(k / n_expert_, k % n_expert_) - off);
-            layer_alias_[(size_t) (k / n_expert_)] = 1;
+        for (int64_t e = 0; e < n_expert_; ++e) {
+            blob_dev_[(size_t) l * n_expert_ + (size_t) e] =
+                (const uint8_t*) d + ((uint64_t) lay.blob_offset(l, e) - off);
+            layer_alias_[(size_t) l] = 1;
         }
     }
     if (runs == 0) {
-        blob_dev_.clear(); layer_alias_.clear(); alias_runs_.clear(); host_free_.clear();
+        blob_dev_.clear(); layer_alias_.clear(); alias_runs_.clear(); fixed_runs_.clear(); host_free_.clear();
         err = "register_pcie_alias: the driver refused every run";
         return false;
     }
-    std::fprintf(stderr, "strata generate: expert arena: PCIe alias registered over %.2f GiB in %d runs%s; the "
-                         "fixed tier's %zu experts stay unregistered and releasable\n",
+    std::fprintf(stderr, "strata generate: expert arena: PCIe alias registered over %.2f GiB in %d per-layer "
+                         "runs%s; the fixed tier's %zu experts stay pinned (per-layer runs can't release them "
+                         "under the driver's region cap)\n",
                  (double) bytes / 1073741824.0, runs,
                  refused ? (", " + std::to_string(refused) + " run(s) refused").c_str() : "", skip.size());
     return true;

@@ -143,6 +143,9 @@ public:
     /// A file-backed source: this expert lives in VRAM, so its pages need not stay in RAM - hand them back to the
     /// kernel (a later read re-reads the file; no result depends on it).  Returns the bytes released; 0 elsewhere.
     virtual uint64_t release(int64_t layer, int64_t expert) { (void) layer; (void) expert; return 0; }
+    /// P4-A: the fixed tier was registered so the profile fill could read it over a live copy; once the fill is
+    /// done nothing reads those host bytes again.  Unregister and hand the pages back.  0 elsewhere.
+    virtual uint64_t release_fixed_tier() { return 0; }
     /// Whether the verify window may give the GPU a PCIe share of this layer's misses at all (each expert is still
     /// checked with `pinned`).  The arena answers per layer through its expert 0; the resident RAM mode's compact
     /// copy has no expert 0 when the GPU cache holds it, so it answers for the whole copy.
@@ -661,6 +664,12 @@ public:
     /// rate, because those are the two numbers that say whether the arena is the one that was asked for.
     bool open(const std::string& pack_dir, int64_t n_layers, int64_t n_expert, int threads, std::string& err,
               uint64_t max_pinned_bytes = 0, const std::string& shared_arena_file = {});
+    /// Fill-failure forensics: the arena's own base (it is exactly `expert_layout().total` bytes long -
+    /// the caller validates a `blob()` pointer against that).
+    const uint8_t* arena_base() const { return base_; }
+    /// Fill-failure forensics: the registered runs' starts (the caller finds the run that owns a `blob()`
+    /// pointer, so a broken range can be pinned to the registration that built it).
+    const std::vector<uint64_t>& alias_runs() const { return alias_runs_; }
     /// Plan v0.3 P6: a native pack without experts.bin takes its experts from the model's GGUF: `native` is the
     /// --native shard, and native_experts.txt names the other shards beside it (per layer, or per role in v4).
     void set_gguf(const std::string& native) { gguf_ = native; }
@@ -677,6 +686,7 @@ public:
     bool pcie_layer(int64_t layer) const override;
     void prefetch(int64_t layer, int64_t expert) override;
     uint64_t release(int64_t layer, int64_t expert) override;
+    uint64_t release_fixed_tier() override;
 
     /// The fixed-tier split (docs/EXPERT_SPLIT_PLAN.md P4): register the anonymous arena EXCEPT the experts
     /// named in `skip` - the fixed tier is pinned in VRAM for the whole session and nothing reads its host
@@ -705,6 +715,9 @@ private:
     std::vector<const uint8_t*> blob_dev_;    ///< selective mode: per-blob device alias, null = CPU-side
     std::vector<uint8_t> layer_alias_;        ///< selective mode: 1 = the layer has at least one aliased expert
     std::vector<uint64_t> alias_runs_;        ///< selective mode: start of each registered run, for unregister
+    std::vector<std::pair<uint64_t,uint64_t>> fixed_runs_;  ///< selective mode: the fixed tier's registered runs
+                                                          ///< (start, length) - registered so the fill can read them,
+                                                          ///< released by release_fixed_tier()
     std::vector<uint8_t> host_free_;          ///< selective mode: 1 = the fixed tier's blob, host copy discardable
     uint64_t slice_bytes_ = 0;
     const uint8_t* base_ = nullptr;

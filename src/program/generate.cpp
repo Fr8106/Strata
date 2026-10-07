@@ -2086,6 +2086,11 @@ int main(int argc, char** argv) {
             o.pcie_frac = base;
             std::fprintf(stderr, "strata generate: PCIe probe failed -> pcie_frac default %.2f\n", base);
         }
+        {   // A sticky fault is reported where it is READ, not where it happened (the gr_read trap in pinned.cu).
+            const char* pe = cudaGetErrorString(cudaGetLastError());
+            if (std::string(pe) != "no error")
+                std::fprintf(stderr, "strata generate: after the PCIe probe, pending CUDA error: %s\n", pe);
+        }
     }
     // the canonical Q2_0 pack's CPU kernels are AVX-512 only; a native pack runs on AVX2 CPUs as well
     if (!native_pack) strata::kernels::cpu::cpu_require_expert_support();
@@ -3502,11 +3507,25 @@ int main(int argc, char** argv) {
         if (!arena_src.register_pcie_alias({profile.begin(), profile.begin() + fn}, aerr))
             std::fprintf(stderr, "strata generate: %s: the PCIe share falls back to the CPU pool\n",
                          aerr.c_str());
+        {   // same sticky probe, bracketing the registration: which phase is the last clean one
+            const char* pe = cudaGetErrorString(cudaGetLastError());
+            if (std::string(pe) != "no error")
+                std::fprintf(stderr, "strata generate: after the PCIe alias registration, pending CUDA error: %s\n",
+                             pe);
+        }
     }
     // ---- R4.2e: fill the tier from the profile.  This is the only place the plan is applied, and it runs
     // ONCE: with `slots` pairs and `slots` slots the cache is full when this returns, so the decode-time
     // admission finds no room and every non-profiled expert stays a CPU miss.  That is what makes the profile
     // the policy rather than a hint.
+    {   // An async fault (a kernel or copy that failed on a side stream) is not thread-sticky; it surfaces at
+        // the next whole-context synchronize.  If THIS fails, the fill's InvalidValue was that fault wearing a
+        // copy's hat - and the config bisection (-vision / -mtp / -ple-gguf / -kv-resident) finds the phase.
+        const cudaError_t se = cudaDeviceSynchronize();
+        if (se != cudaSuccess)
+            std::fprintf(stderr, "strata generate: pre-fill sync: %s (a prior async fault, not the fill)\n",
+                         cudaGetErrorString(cudaGetLastError()));
+    }
     int64_t prefilled = 0;
     if (!profile.empty() && srcp != nullptr) {
         // #369 (dag08): per layer, a full layer skips only its own pairs - each layer takes its hottest experts until
@@ -3529,10 +3548,114 @@ int main(int argc, char** argv) {
                 break;
             }
             const uint8_t* b = srcp->blob(profile[(size_t) i].first, profile[(size_t) i].second);
-            if (b == nullptr || !xcache.fill_slot_blocking(slot, b, err,
-                    (int64_t) strata::kernels::cpu::expert_layout().blob_bytes(profile[(size_t) i].first))) {
+            const int64_t nb = strata::kernels::cpu::expert_layout().blob_bytes(profile[(size_t) i].first);
+            if (b == nullptr || !xcache.fill_slot_blocking(slot, b, err, nb)) {
                 std::fprintf(stderr, "strata generate: the profile fill failed at pair %lld: %s\n",
                              (long long) i, err.c_str());
+                {   // One-shot pointer bisection: which side of the copy is broken, and how the driver
+                    // classifies each pointer.  Fresh buffers isolate a bad src from a bad dst.
+                    const auto& lay = strata::kernels::cpu::expert_layout();
+                    const uint64_t off = lay.blob_offset(profile[(size_t) i].first,
+                                                         profile[(size_t) i].second);
+                    std::fprintf(stderr,
+                                 "  fill diag: src=%p dst=%p bytes=%lld | layout total=%llu off=%llu "
+                                 "in_range=%d\n",
+                                 (const void*) b, (const void*) xcache.device_slot(slot), (long long) nb,
+                                 (unsigned long long) lay.total, (unsigned long long) off,
+                                 (int) (off + (uint64_t) nb <= lay.total));
+                    if (auto* as = dynamic_cast<strata::core::ArenaExpertSource*>(srcp)) {
+                        const uint8_t* ab = as->arena_base();
+                        std::fprintf(stderr, "  arena: base=%p (src is %td past the base, arena is %llu bytes)\n",
+                                     (const void*) ab, ab ? (const int8_t*) b - (const int8_t*) ab : 0,
+                                     (unsigned long long) lay.total);
+                    }
+                    cudaPointerAttributes pa{}, pb{};
+                    std::fprintf(stderr, "  src attrs: %s (type=%d)\n",
+                                 cudaGetErrorString(cudaPointerGetAttributes(&pa, (const void*) b)), pa.type);
+                    std::fprintf(stderr, "  dst attrs: %s (type=%d)\n",
+                                 cudaGetErrorString(cudaPointerGetAttributes(&pb, (const void*) xcache.device_slot(slot))),
+                                 pb.type);
+                    void* nd = nullptr; uint8_t* nh = nullptr;
+                    if (cudaMalloc(&nd, 4 << 20) == cudaSuccess &&
+                        cudaHostAlloc((void**) &nh, 4 << 20, cudaHostAllocDefault) == cudaSuccess) {
+                        std::fprintf(stderr, "  fresh dst + old src: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  old dst + fresh src: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(xcache.device_slot(slot), nh, (size_t) nb,
+                                                                  cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  small (64 KiB) from old src: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nd, b, 65536, cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  async from old src: %s\n",
+                                     cudaGetErrorString(cudaMemcpyAsync(nd, b, (size_t) nb, cudaMemcpyHostToDevice, 0)));
+                        (void) cudaGetLastError();
+                        // Is the host page even alive?  A CPU read faults it in if the OS dropped it.
+                        volatile uint8_t cpu_byte = b[0];
+                        // Registering the src's own page range, then copying, isolates a registration-state problem.
+                        const uint64_t pg = (uint64_t) ((uintptr_t) b & ~0xFFFULL);
+                        std::fprintf(stderr, "  src page cpu read: %u; register src range: %s\n", cpu_byte,
+                                     cudaGetErrorString(cudaHostRegister((void*) pg, 4 << 20,
+                                                                         cudaHostRegisterPortable)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  after registering src range: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  unregister src range: %s\n",
+                                     cudaGetErrorString(cudaHostUnregister((void*) pg)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  copy after unregister: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  re-register src range: %s\n",
+                                     cudaGetErrorString(cudaHostRegister((void*) pg, 4 << 20,
+                                                                         cudaHostRegisterPortable)));
+                        (void) cudaGetLastError();
+                        std::fprintf(stderr, "  copy after re-register: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nd, b, (size_t) nb, cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        // Bounce: the bytes through a FRESH host buffer.  If this passes while every copy
+                        // straight from b fails, the driver's record for b's range is stale, not the bytes.
+                        std::memcpy(nh, b, (size_t) nb);
+                        std::fprintf(stderr, "  bounce (fresh host buffer): %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nd, nh, (size_t) nb, cudaMemcpyHostToDevice)));
+                        (void) cudaGetLastError();
+                        // HtoH from the same src: the host copy path, no DMA engine.
+                        std::fprintf(stderr, "  HtoH from old src: %s\n",
+                                     cudaGetErrorString(cudaMemcpy(nh, b, (size_t) nb, cudaMemcpyHostToHost)));
+                        (void) cudaGetLastError();
+                        // Localize: which positions in the registered range are broken?  64 KiB windows at
+                        // 32 KiB steps across the owning run, plus the run's own boundaries.
+                        auto probe64 = [&](const uint8_t* p, const char* label) {
+                            std::fprintf(stderr, "  64 KiB @%s: %s\n", label,
+                                         cudaGetErrorString(cudaMemcpy(nd, p, 65536, cudaMemcpyHostToDevice)));
+                            (void) cudaGetLastError();
+                        };
+                        if (auto* as = dynamic_cast<strata::core::ArenaExpertSource*>(srcp)) {
+                            const uint8_t* ab = as->arena_base();
+                            const auto& runs = as->alias_runs();
+                            const uint64_t src_off = (uint64_t) (b - ab);
+                            size_t ri = 0;
+                            for (size_t k = 0; k < runs.size(); ++k)
+                                if (runs[k] <= src_off) ri = k;
+                                else break;
+                            std::fprintf(stderr,
+                                         "  run owning src: start=%llu (src is %td into it), next run start=%llu, %zu runs\n",
+                                         (unsigned long long) runs[ri], (ptrdiff_t) (src_off - runs[ri]),
+                                         (ri + 1 < runs.size()) ? (unsigned long long) runs[ri + 1] : 0ull, runs.size());
+                            char buf[64];
+                            for (int k = 0; k < 32; ++k) {   // 32 KiB steps over the first MiB of the run
+                                std::snprintf(buf, sizeof buf, "run+%d*32KiB", k);
+                                probe64(ab + runs[ri] + (uint64_t) k * 32768, buf);
+                            }
+                            probe64(b, "src");
+                            probe64(b + (2 << 20), "src+2MiB");
+                        }
+                        cudaFree(nd);
+                        cudaFreeHost(nh);
+                    }
+                }
                 return 1;
             }
             ++prefilled;
@@ -4368,10 +4491,15 @@ int main(int argc, char** argv) {
             static const bool keep = std::getenv("STRATA_ARENA_RELEASE") && std::getenv("STRATA_ARENA_RELEASE")[0] == '0';
             rss_probe("before the release");
             uint64_t released = 0;
-            if (!keep)
+            if (!keep) {
+                // P4-A: the fixed tier was registered only so the fill could read it; now that the fill is done,
+                // unregister + DONTNEED the whole tier so its host bytes leave RAM (the per-blob release() below
+                // is a no-op on already-freed pages).
+                released += srcp->release_fixed_tier();
                 for (size_t i = 0; i < host_res.size(); ++i)
                     if (host_res[i] != strata::core::kNotResident)
                         released += srcp->release((int64_t) i / g.n_expert, (int64_t) i % g.n_expert);
+            }
             if (released > 0)
                 std::fprintf(stderr, "strata generate: expert arena: %.2f GiB of VRAM-held experts handed back to the OS\n",
                              (double) released / (1024.0 * 1024.0 * 1024.0));
