@@ -4,6 +4,8 @@
 **模型**：Qwen3.8-Flash-Next（48 层 × 512 专家，IQ3_S，`strata-iq3_s.json`）
 **状态**：方案 B（tier 有序 arena）已全验收通过；本问题是**实际使用测试**中暴露的新故障，配置层（方案 A）只能部分缓解。
 
+> **10-08 更新**：根因已由 `64ff01e` 确认修复＝**tier 边界 blob 的别名负偏移**（GPU 直读越界）。本文的"KV 流式饱和 / 显存贴地"触发假设与"verify 自适应放宽"路线**已被对照实测证伪或取代**；`--kv-resident` 已按用户裁定改回 32768。后续见 `docs/HARDENING-HANDOFF-2026-10-08.md` 与 `docs/HARDENING-PLAN-2026-10-08.md`。
+
 ---
 
 ## 0. 一句话求助
@@ -23,7 +25,7 @@
 - 机制：`Verifier::run` 在独立 stream 上 launch 一个 CUDA graph，host 线程自旋等 GPU 逐层写 `seq` 计数器，**每层 5 s 硬超时**（`release_gpu_waits(5000)`）。超时 → 引擎 `EngineDied` → server 重启引擎（`reading the model's weights ... a minute or two`）。
 - dmesg（每次故障后）：
   - `NVRM: Going over RM unhandled interrupt threshold for irq 166`（重复多次，~40 s 间隔）
-  - `Xid 31 ... MMU Fault: ENGINE GRAPHICS ... FAULT_PTE ACCESS_TYPE_VIRT_READ @ 0x71d5_3c049000`（收尾期，是卡死状态的**后果**非起因）
+  - `Xid 31 ... MMU Fault: ENGINE GRAPHICS ... FAULT_PTE ACCESS_TYPE_VIRT_READ @ 0x71d5_3c049000`（10-08 修正因果：该 fault 本身是**根因的直接产物**——别名负偏移的越界读；完整链条＝越界读 → Xid 31 → 层内核停 → flag 永不置位 → verify 超时。当时标"后果非起因"是把超时链当作了整链）
 - 面板表现：请求 `Error`，随后 8088 无响应数分钟。
 
 **时间线（2026-10-07，本地时间）**：
