@@ -1,0 +1,62 @@
+10-08 12:08:56 soak start: rounds=12 xids=0 verify-timeouts=6 bounce-lines=15 geometry-lines=3
+soak-r1 r0 conv0: OK in 9.7s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r1 r0 conv1: OK in 28.4s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r1 r0 conv2: OK in 40.4s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r1: 3/3 requests completed
+10-08 12:10:15 round 1: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r2 r0 conv0: OK in 9.2s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r2 r0 conv1: OK in 24.0s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r2 r0 conv2: OK in 36.9s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r2: 3/3 requests completed
+10-08 12:11:25 round 2: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r3 r0 conv0: OK in 44.8s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r3 r0 conv1: OK in 24.1s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r3 r0 conv2: OK in 36.5s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r3: 3/3 requests completed
+10-08 12:13:10 round 3: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r4 r0 conv0: OK in 9.6s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r4 r0 conv1: OK in 23.8s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r4 r0 conv2: OK in 37.9s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r4: 3/3 requests completed
+10-08 12:14:22 round 4: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r5 r0 conv0: OK in 9.2s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r5 r0 conv1: OK in 24.3s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r5 r0 conv2: OK in 36.5s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r5: 3/3 requests completed
+10-08 12:15:32 round 5: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r6 r0 conv0: OK in 9.0s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r6 r0 conv1: OK in 24.0s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r6 r0 conv2: OK in 36.9s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r6: 3/3 requests completed
+10-08 12:16:42 round 6: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r7 r0 conv0: OK in 8.8s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r7 r0 conv1: OK in 24.2s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r7 r0 conv2: OK in 36.5s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r7: 3/3 requests completed
+10-08 12:17:52 round 7: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r8 r0 conv0: OK in 8.8s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r8 r0 conv1: OK in 24.0s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r8 r0 conv2: OK in 37.0s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r8: 3/3 requests completed
+10-08 12:19:02 round 8: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r9 r0 conv0: OK in 9.0s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r9 r0 conv1: OK in 24.0s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r9 r0 conv2: OK in 36.4s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r9: 3/3 requests completed
+10-08 12:20:11 round 9: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r10 r0 conv0: OK in 8.9s usage={'prompt_tokens': 32053, 'completion_tokens': 512, 'total_tokens': 32565, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r10 r0 conv1: OK in 24.2s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r10 r0 conv2: OK in 36.5s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r10: 3/3 requests completed
+10-08 12:21:21 round 10: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r11 r0 conv0: OK in 10.3s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r11 r0 conv1: OK in 23.7s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r11 r0 conv2: OK in 36.4s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r11: 3/3 requests completed
+10-08 12:22:31 round 11: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+soak-r12 r0 conv0: OK in 9.4s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r12 r0 conv1: OK in 24.0s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r12 r0 conv2: OK in 36.4s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+soak-r12: 3/3 requests completed
+10-08 12:23:41 round 12: verify-timeouts=0 new-xids=0 MemAvail-min=9GiB
+10-08 12:23:41 SOAK DONE rounds=12 restarts=0 verify-timeouts=0 new-xids=0 bounce-lines=+0 geometry-bad-lines=0 MemAvail-min=9GiB
