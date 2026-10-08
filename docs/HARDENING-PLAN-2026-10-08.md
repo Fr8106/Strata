@@ -84,12 +84,19 @@
 - 效果：`bo >= ns` 恒真、跨界拷贝不存在、**每层 0 个** CPU-path 专家（顺带解决 R6 的"最热非驻留被降级"）；gap/别名规则/bounce 保留为纵深防御。
 - 验证：T3 校验器全绿 + T1 基线对照（prefill/decode 不降）+ `expert_layout_test` 合成段。
 - 若 T4 表明仅-Portable 相邻已被接受：gap 逻辑可进一步简化——**先测后改**，本任务默认保守版（只加 pad）。
+- **2026-10-08 设计结论（实施前核查）**：pad 只进 `expert_off` 表不够——层跨度数学假设 arena==file：
+  `register_tier_runs` end（:3117）、`validate_geometry`（:3220）、`fixed_runs_`（:3274）、canary（:3327）、
+  load bounds（:2813）、`experts.bin` 尺寸核对（`got != want`，:2717）、pack hash（:2430）都要改，
+  改动落在装载器/包一致性这一最高风险面。收益=每层 1 个跨界 blob（48/24576≈0.2%）少走一次非零拷贝。
+  **门**：T7-1 `noalias_reads` 遥测（已入库 61f3cb2）+ T4/t18；遥测显示边界专家基本不被热取 → 本任务关闭。
 
 ### T7 P2 包
 1. `noalias_hits` 计数：`blob()`/`pinned()` 返回 null 的 CPU-path 分支计数，进 serve 遥测行（R6 正式化）。
 2. `STRATA_FORCE_NOALIAS_PCT=N`：注册时随机 N% blob 不发别名（仅调试构建路径，warn-once），跑 `seq-160k` 全链——压所有 `pinned()==false` 消费者（verify/prefill/loan/adapt）。
 3. 浸泡：夜间 `≥30` 序列或 ≥8 h（复用 `aprime-win.sh` 闭环 + dead-man，systemd 托管），指标=验收表 §4。
 4. teardown（R10）：`close()`（`expert_source.cpp:2930`）现无条件二次注销——在 `release_gpu_waits` 后若设备同步失败（卡死）则跳过 unregister/munmap，让内核回收，避免次生 Xid 污染取证（`generate.cpp:7317` #224 注释是旁证）。
+
+**状态（2026-10-08）**：1/2/4 代码已入库（61f3cb2，实现注：1 的漏斗是 `blob()` 里 `blob_dev_[idx]==null`——CUDA 路 noalias 时 `blob()` 本身不返回 null；2 是注册后置一遍确定性抽样（g%100<pct），geometry 行/edge hash 反映注入后状态）。3（浸泡）与 `seq-160k` 注入跑挂窗口。
 
 ### T8 暂缓（明示）
 R7 封装：T2–T5 后调用点仍只有 3 处 + 校验器一处，抽 `HostRangeTable` 收益未证明；且**禁止**建第二份 run 表（#267 本身就是两份视图不同步的病）。T5 落地后重评。
