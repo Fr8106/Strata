@@ -3027,6 +3027,14 @@ uint64_t ArenaExpertSource::release_fixed_tier() {
     fixed_released_ = true;
     for (size_t k = 0; k < host_free_.size(); ++k)
         if (host_free_[k] && k < blob_dev_.size()) blob_dev_[k] = nullptr;
+    // T3: prove the release rounded INWARD - every tier boundary page that stayed behind must be
+    // byte-identical to what validate_geometry() fingerprinted at registration.  A mismatch means the
+    // DONTNEED range ate an edge page, which would zero a live non-fixed blob's head: silent bad
+    // weights, exactly the class this program is here to make loud.
+    for (size_t l = 0; l < edge_hash_.size(); ++l)
+        if (edge_hash_[l] != 0 && fnv64(base_ + edge_off_[l], 4096) != edge_hash_[l])
+            std::fprintf(stderr, "strata generate: WARNING: layer %zu's tier boundary page changed during the "
+                                 "fixed-tier release - the release range must round inward (T3)\n", l);
     return released;
 #endif
 }
@@ -3098,6 +3106,7 @@ static void pcie_reg_log(uint64_t off, const void* ptr, size_t size, uint32_t fl
 // experts just keep the CPU path.  At most `max_runs` registered runs (-1 = all).
 ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flags, int max_runs, bool include_fixed) {
     reg_stats s;
+    runs_.clear();   // T3: the validator judges exactly what this call registered
     if (base_ == nullptr || map_ != nullptr) return s;
     const auto& lay = strata::kernels::cpu::expert_layout();
     const int64_t n_layers = blobs_ / n_expert_;
@@ -3131,6 +3140,7 @@ ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flag
                 ++s.runs;
                 s.bytes += fe - fs;
                 alias_runs_.push_back(fs);
+                runs_.push_back({fs, fe - fs, (const uint8_t*) d, true});
             } else {
                 // a refused fixed run costs only this layer's zero-copy alias: the fill reads through the
                 // host pointer, and the canary ladder's L2 proves the pageable path works
@@ -3151,6 +3161,7 @@ ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flag
                 ++s.runs;
                 s.bytes += ne - ns;
                 alias_runs_.push_back(ns);
+                runs_.push_back({ns, ne - ns, (const uint8_t*) d, false});
                 for (int64_t e = 0; e < n_expert_; ++e) {
                     const uint64_t bo = lay.blob_offset(l, e);
                     // Only a blob WHOLLY inside the registered run gets an alias.  The tier boundary is not a
@@ -3170,7 +3181,63 @@ ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flag
             }
         }
     }
+    // T3: one startup line that says what the geometry IS, and whether it is wrong - deterministic, not
+    // the 4/42 lottery.  WARN-only for now; flips to fail-closed after two soak nights without a false
+    // positive (docs/HARDENING-PLAN-2026-10-08.md risk table).
+    std::string gsum;
+    const int64_t gbad = validate_geometry(gsum);
+    std::fprintf(stderr, "strata generate: geometry: %s%s\n", gsum.c_str(),
+                 gbad ? "  <-- BAD: an alias or run range is wrong; reads of it fault the GPU (#267)" : "");
     return s;
+}
+
+// FNV-1a 64-bit - the loader's own hash, reused so "verified at load" and "unchanged after release"
+// speak the same arithmetic.
+uint64_t ArenaExpertSource::fnv64(const uint8_t* p, uint64_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint64_t i = 0; i < n; ++i) h = (h ^ p[i]) * 1099511628211ull;
+    return h;
+}
+
+// T3: see the header.  Cost: O(blobs + runs^2) integer work plus one 4 KiB hash per unaligned tier
+// boundary - milliseconds at 24576 blobs.  The tail test is explicit on purpose (#267 was the head
+// half; the tail half is only implied by the contiguous-tiling invariant today, and T5's padding
+// must not be able to break it silently).
+int64_t ArenaExpertSource::validate_geometry(std::string& summary) {
+    const auto& lay = strata::kernels::cpu::expert_layout();
+    const int64_t n_layers = blobs_ / n_expert_;
+    int64_t bad = 0, aliased = 0, noalias = 0;
+    for (const auto& r : runs_)
+        if (r.size == 0 || (r.off & 4095) || (r.size & 4095)) ++bad;
+    for (size_t i = 0; i < runs_.size(); ++i)
+        for (size_t j = i + 1; j < runs_.size(); ++j)
+            if (runs_[i].off < runs_[j].off + runs_[j].size &&
+                runs_[j].off < runs_[i].off + runs_[i].size) ++bad;
+    edge_hash_.assign((size_t) n_layers, 0);
+    edge_off_.assign((size_t) n_layers, 0);
+    for (int64_t l = 0; l < n_layers; ++l) {
+        const uint64_t per = lay.blob_bytes(l), off = lay.layer_offset(l);
+        const uint64_t nfix = (fixed_cnt_.empty() ? 0 : (uint64_t) fixed_cnt_[(size_t) l]) * per;
+        const uint64_t bnd = off + nfix;
+        if (bnd & 4095) {   // an unregistered page between the runs: fingerprint it for the release check
+            edge_off_[(size_t) l] = bnd & ~(uint64_t) 4095;
+            edge_hash_[(size_t) l] = fnv64(base_ + edge_off_[(size_t) l], 4096);
+        }
+        for (int64_t e = 0; e < n_expert_; ++e) {
+            const size_t g = (size_t) l * n_expert_ + (size_t) e;
+            const uint8_t* dev = blob_dev_.empty() ? nullptr : blob_dev_[g];
+            if (dev == nullptr) { ++noalias; continue; }
+            ++aliased;
+            const uint64_t bo = lay.blob_offset(l, e);
+            const reg_run* r = nullptr;
+            for (const auto& q : runs_)
+                if (q.off <= bo && bo < q.off + q.size) { r = &q; break; }
+            if (r == nullptr || bo + per > r->off + r->size || dev != r->dev + (bo - r->off)) ++bad;
+        }
+    }
+    summary = "runs=" + std::to_string(runs_.size()) + " aliased=" + std::to_string(aliased) +
+              " noalias=" + std::to_string(noalias) + " bad=" + std::to_string(bad);
+    return bad;
 }
 
 bool ArenaExpertSource::register_pcie_alias(const std::vector<std::pair<int64_t,int64_t>>& skip, std::string& err) {

@@ -703,6 +703,13 @@ public:
     /// "L0"/"L1"/"L2" for the level whose canary passed, or "" if even L2's canary fails (the fill will then
     /// fail with its full diagnostics - the ladder degrades the mode, it does not paper over a dead driver).
     std::string canary_ladder(std::string& err);
+    /// T3 (docs/HARDENING-PLAN-2026-10-08.md): validate the whole alias/run geometry at startup instead of
+    /// letting a random verify window hit it 4/42 times: runs page-aligned and pairwise disjoint, and every
+    /// device alias inside its own run's registered range - head AND tail AND the pointer arithmetic.  An
+    /// alias outside its run is #267 (Xid 31 on the GPU, timeout far away).  Returns the bad count; also
+    /// fingerprints each tier boundary's unregistered shared page so release_fixed_tier() can prove it
+    /// rounded its DONTNEED range inward.  Fills `summary` for the startup line.
+    int64_t validate_geometry(std::string& summary);
 
     /// What backing was obtained and why, for the startup print.  "The engine adapts to the machine it is on" is
     /// only true if the engine says what it got.
@@ -736,6 +743,11 @@ private:
                                               ///< blob() must not hand out a pointer into them (they would fault zero)
     std::atomic<bool> fixed_warned_{false};   ///< the blob() guard says it once (the pool's threads race to it)
     struct reg_stats { int runs = 0, refused = 0; uint64_t bytes = 0; };
+    struct reg_run { uint64_t off, size; const uint8_t* dev; bool fixed; };   // T3: as registered (aligned)
+    std::vector<reg_run> runs_;              ///< rebuilt by every register_tier_runs() call, for validate_geometry
+    std::vector<uint64_t> edge_hash_, edge_off_;   ///< per layer: FNV-64 of the tier boundary's shared page
+                                                   ///< and its arena offset (0 = the boundary is page-aligned)
+    static uint64_t fnv64(const uint8_t* p, uint64_t n);
     reg_stats register_tier_runs(uint32_t flags, int max_runs, bool include_fixed);   ///< the per-layer two-run
                                               ///< loop: the fixed run (if include_fixed) + the non-fixed run
     bool canary(std::string& err, bool pageable = false);      ///< small HtoD + read-back at sampled layers

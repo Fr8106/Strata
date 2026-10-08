@@ -402,6 +402,31 @@ void tier_order() {
                                     (size_t) blob) == 0;
         check(exact, "load_experts_tier lands every expert's bytes at its tier destination (100-B chunks)");
     }
+    // T3 (docs/HARDENING-PLAN-2026-10-08.md): the registration geometry derived from this table.  With nfix
+    // fixed experts the runs are [floor4k(off), floor4k(off+nfix*blob)) and [ceil4k(...), ceil4k(end)); the
+    // invariant that #267 broke is that AT MOST ONE blob straddles the boundary - exactly one when the
+    // boundary is not page-aligned.  If a future change (T5 padding) moves these numbers, this check says so.
+    {
+        const int64_t nfix[2] = {2, 1};
+        bool ok = true;
+        int straddlers = 0, want = 0;
+        for (int64_t l = 0; l < 2; ++l) {
+            const uint64_t off = L.layer_offset(l);
+            const uint64_t bnd = off + (uint64_t) nfix[l] * (uint64_t) blob;
+            const uint64_t fe = bnd & ~(uint64_t) 4095, ns = (bnd + 4095) & ~(uint64_t) 4095;
+            const uint64_t end = off + (uint64_t) NE * (uint64_t) blob;
+            const uint64_t ne = (end + 4095) & ~(uint64_t) 4095;
+            ok = ok && ns >= fe && ne > ns;   // the two registered runs never overlap
+            if (bnd & 4095) ++want;           // unaligned boundary: exactly one blob may straddle it
+            for (int64_t e = 0; e < NE; ++e) {
+                const uint64_t bo = T.blob_offset(l, e);
+                if (bo >= bnd && bo < ns) ++straddlers;             // starts in the unregistered page: the #267 shape
+                if (bo >= bnd) ok = ok && (bo >= ns || bo == bnd);  // the first non-fixed blob starts at bnd
+            }
+        }
+        check(ok && straddlers == want, "the two runs never overlap; at most one straddling blob per boundary "
+                                        "(exactly one when unaligned) - the alias rule has <=1 per layer to excuse");
+    }
 }
 }  // namespace
 
