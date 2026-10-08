@@ -1,7 +1,138 @@
-t18 probe matrix - run status 2026-10-08: NOT RUN YET.
-Blocked: swift15 holds 31950/32607 MiB VRAM; even a 4 MiB cudaMalloc
-is refused when the context would start that close to the brim. Runs in the T1 window
-(same closed loop as the baseline). Command:
-  ./tools/repro/t18 | tee tools/repro/probe-matrix-results.txt
-Cells (flags x layout x size x shape) - the pre-measured row from t16/t17 is:
-  Portable|Mapped adjacent straddle = REFUSED; gap = ACCEPTED (610.57.04)
+
+== flags=Portable|Mapped layout=adjacent (pre-fix shape) ==  register: [0,33558528)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== flags=Portable|Mapped layout=gap  (64ff01e shape) ==  register: [0,33554432)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== flags=Portable only layout=adjacent (pre-fix shape) ==  register: [0,33558528)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== flags=Portable only layout=gap  (64ff01e shape) ==  register: [0,33554432)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== U arm == unregistered 1 GiB anonymous source, no registrations: no error (no-pressure baseline; 9ad8c44's refusal needs pressure - not manufactured here)
+
+== release arm == straddle over [released run | gap | live run]: ACCEPTED
+
+== VERDICT (adjudicated 2026-10-08 against the recomputed zone decomposition) ==
+On driver 610.57.04 the flags do not matter: Portable|Mapped and Portable-only give an identical
+matrix; Mapped only buys cudaHostGetDevicePointer.  The rule for cudaMemcpyAsync HtoD SOURCES:
+  [R1|R2]  straddling two registered runs (gap or adjacent)     REFUSED at every size, every page offset
+  [R1|GAP] registered -> unregistered gap direction              REFUSED  (asymmetric!)
+  [GAP|R2] unregistered gap -> registered direction              ACCEPTED (the engine's non-fixed boundary blob)
+  [GAP]    / fully pageable                                    ACCEPTED (U arm, no pressure)
+  released-run straddle                                        ACCEPTED (post-release fixed tier)
+Engine consequence: <=2 no-alias blobs per layer.  The LAST FIXED blob [bnd-per,bnd) is the [R1|GAP]
+direction: its fill copy is REFUSED and bounces through the pinned staging (T2 makes that countable;
+before T2 it was the silent arm-B shape).  The FIRST NON-FIXED blob [bnd,bnd+per) is [GAP|R2]: its
+copy is ACCEPTED - 64ff01e took away only its alias (device-pointer arithmetic outside a mapping was
+the Xid/#267 path, a GPU read, not a copy source).

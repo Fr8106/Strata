@@ -98,6 +98,20 @@
 
 **状态（2026-10-08）**：1/2/4 代码已入库（61f3cb2，实现注：1 的漏斗是 `blob()` 里 `blob_dev_[idx]==null`——CUDA 路 noalias 时 `blob()` 本身不返回 null；2 是注册后置一遍确定性抽样（g%100<pct），geometry 行/edge hash 反映注入后状态）。3（浸泡）与 `seq-160k` 注入跑挂窗口。
 
+### 窗口实测（10-08 11:50，`tools/repro/hardening-win.sh`，记录 `tools/repro/hardening-win-results.txt`）
+- **T4 完成**：t18 全矩阵落 `tools/repro/probe-matrix-results.txt`（含裁决段）。规则：flags 无关（Mapped 只买到
+  `cudaHostGetDevicePointer`）；跨两个注册 run＝拒（gap 与相邻同矩阵）；**run→gap 方向拒、gap→run 方向收**（不对称）。
+  引擎每层 ≤2 个 no-alias blob：非固定侧边界 blob 拷贝方向被收（64ff01e 只撤它的别名——GPU 读越映射才是 #267）；
+  固定侧末 blob 拷贝方向被拒 → 走 T2 bounce（实测每次启动 ≥5 次，全是这个方向；T2 之前它就是 B 臂"静默跳过"形态）。
+- **T1 完成**（加固版基线，seq 32K/100K/160K，3/3）：prefill 4697.8/4645.5/4599.1 tok/s（参照 4468 → 101–105%，不降）；
+  decode 169.4/149.3/183.3 tok/s（带 104–198 内）；verify 超时 0；geometry `bad=0`（三次冷启动逐位一致）；
+  MemAvailable 谷 14.3 GiB（安全线 8）。
+- **T7-2 注入臂完成**（`STRATA_FORCE_NOALIAS_PCT=5`，+897 个撤别名）：3/3 完成、超时 0、bounce 形态不变——
+  所有 `pinned()==false` 消费者（verify/prefill/loan/adapt）在 CPU 路上无一崩。
+  性能代价定标 T5：noalias 25.8%→29.5% 对应 160K prefill −3.4% ⇒ 线性外推 48 个边界 blob（0.2%）≈ **0.03%**，
+  装载器不变式手术不值——**T5 按遥测门关闭**（决策记录见 T5 节）。
+- 恢复后 :8088 服务即加固版（geometry 行是代码指纹），注入臂日志与基线臂一致，无残留。
+
 ### T8 暂缓（明示）
 R7 封装：T2–T5 后调用点仍只有 3 处 + 校验器一处，抽 `HostRangeTable` 收益未证明；且**禁止**建第二份 run 表（#267 本身就是两份视图不同步的病）。T5 落地后重评。
 

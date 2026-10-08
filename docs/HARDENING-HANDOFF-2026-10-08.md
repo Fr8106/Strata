@@ -138,9 +138,9 @@
 
 | 假设 | 证据 | 若不成立的后果 | 探针 | 退路 |
 |---|---|---|---|---|
-| (a) 源跨 registered\|gap\|registered 被接受 | t17 C（610.57.04） | 骑边界拷贝失败 | t18 矩阵 + 每次驱动升级后重跑 | bounce（T2 后带日志）；T5 后该形态不再出现 |
-| (b) 跨相邻两 Mapped 注册被拒 | t16/t17 B | 几何 bug 被误当能过 | t18（含**仅 Portable** 臂，决定 R12/gap 简化） | T5 对齐填充 = 构造性消除 |
-| (c) 未注册区 HtoD 在压力下被拒 | 9ad8c44 现场观察，**混杂未隔离** | 设计前提之一不成立 | t18 隔离臂（全不注册+压力） | 无承重：bounce 只是纵深防御 |
+| (a) 源跨 registered\|gap\|registered 被接受 | **t18 修正（10-08 窗口）**：不对称。GAP→run 方向 ACCEPTED（引擎非固定侧边界 blob 的拷贝方向）；run→GAP 方向 REFUSED（固定侧末 blob → 走 T2 bounce）。t17 C 的"接受"只覆盖前者 | 骑边界拷贝失败 | t18 全矩阵已落 `tools/repro/probe-matrix-results.txt`（含裁决段）；驱动升级后重跑 | bounce（T2 后带日志，实测每启动 ~5+ 次全在 [R1\|GAP] 方向）；T5 已裁决关闭（见计划 T5） |
+| (b) 跨相邻两注册被拒 | **t18 确证**：有 gap 与否完全同矩阵；flags 无关（Mapped 只为 `cudaHostGetDevicePointer`）| 几何 bug 被误当能过 | 已测毕；驱动升级后重跑 t18 | 别名规则按 run 包含（T3 校验 `bad=0` 实测） |
+| (c) 未注册区 HtoD 在压力下被拒 | 9ad8c44 现场观察，**混杂未隔离**；t18 U 臂无压力基线=ACCEPTED（1 GiB 匿名源） | 设计前提之一不成立 | 压力半臂仍未制造（需真实内存压力窗口） | 无承重：bounce 只是纵深防御 |
 | 别名只能指 run 内部 | #267（t17 复现） | Xid 31/超时 | T3 启动校验（显式含尾部包含） | 无别名走 CPU 路；fail-fast 已在 verify 两处 |
 | DONTNEED 只及内部、边页保留 | 代码 `:3015-3021` + 内核 pinned/匿名语义 | 相邻 blob 被清 | T3 边界 blob 校验和 | 已构造保证；T5 后共享页消失 |
 | `cudaHostUnregister` 不等待在飞 DMA | 文档未承诺（待 NVIDIA） | 注销撞拷贝 | T2 bounce 计数 + 分类 | 现行流程释放发生在 serving 前（无窗口）；未来动态释放才需状态机 |

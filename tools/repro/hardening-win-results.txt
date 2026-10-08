@@ -1,0 +1,179 @@
+11:50:14 strata.service stopped (it will be restarted by the dead-man on any exit path)
+11:50:14 === memory: pre (59.5207 GiB avail) ===
+11:50:14 VRAM released (used=34 MiB)
+11:50:17 page cache dropped (59.7589 GiB avail)
+11:50:17 === t18 probe matrix ===
+
+== flags=Portable|Mapped layout=adjacent (pre-fix shape) ==  register: [0,33558528)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== flags=Portable|Mapped layout=gap  (64ff01e shape) ==  register: [0,33554432)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== flags=Portable only layout=adjacent (pre-fix shape) ==  register: [0,33558528)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== flags=Portable only layout=gap  (64ff01e shape) ==  register: [0,33554432)=no error [33558528,67108864)=no error
+  size    4096 B:
+    inside run 1                    : ACCEPTED
+    (other sizes control = same as the first)
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : ACCEPTED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size   65536 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+  size 2097152 B:
+    inside run 1                    : ACCEPTED
+    end exactly at run-1 end        : ACCEPTED
+    end +1 byte past run-1 end      : REFUSED
+    end +1 page  past run-1 end     : REFUSED
+    deep straddle, start -0    of page: ACCEPTED
+    deep straddle, start -1    of page: REFUSED
+    deep straddle, start -2048 of page: REFUSED
+    deep straddle, start -4095 of page: REFUSED
+
+== U arm == unregistered 1 GiB anonymous source, no registrations: no error (no-pressure baseline; 9ad8c44's refusal needs pressure - not manufactured here)
+
+== release arm == straddle over [released run | gap | live run]: ACCEPTED
+11:50:18 t18 done -> tools/repro/probe-matrix-results.txt
+11:50:18 [baseline] seq 32000,100000,160000 env: none
+11:51:18 [baseline] engine ready
+baseline r0 conv0: OK in 10.0s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+baseline r0 conv1: OK in 25.3s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+baseline r0 conv2: OK in 38.2s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+baseline: 3/3 requests completed
+11:52:32 === [baseline] engine evidence ===
+--- verify timeouts: 0
+strata generate: expert cache 12636 slots, 24.00 GiB of VRAM; policy is
+strata generate: geometry: runs=96 aliased=18227 noalias=6349 bad=0
+strata generate: fill_slot_blocking bounced a refused copy #1: 2176000 B from 0x7d71c9265400 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #2: 2329600 B from 0x7d6b54534800 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #3: 2176000 B from 0x7d6f4cacd400 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #4: 1971200 B from 0x7d689cf53800 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #5: 2329600 B from 0x7d6d430c1c00 (invalid argument)
+strata generate: NOTE: 6350 blob read(s) hit an expert with no PCIe alias (tier boundary or injected) - its copies took the CPU path
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 6823 ms (4697.8 tok/s), 512 generated in 3022 ms (169.4 tok/s), drafts accepted 374 of 392, 2 checkpoints
+strata generate: NOTE: 6361 blob read(s) hit an expert with no PCIe alias (tier boundary or injected) - its copies took the CPU path
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 21538 ms (4645.5 tok/s), 512 generated in 3430 ms (149.3 tok/s), drafts accepted 254 of 379, 6 checkpoints
+strata generate: NOTE: 6606 blob read(s) hit an expert with no PCIe alias (tier boundary or injected) - its copies took the CPU path
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 34801 ms (4599.1 tok/s), 512 generated in 2794 ms (183.3 tok/s), drafts accepted 300 of 397, 6 checkpoints
+MemAvailable:   14295556 kB
+11:52:34 engine stopped (VRAM 34 MiB)
+11:52:35 [noalias5] seq 32000,100000,160000 STRATA_FORCE_NOALIAS_PCT=5
+11:53:29 [noalias5] engine ready
+noalias5 r0 conv0: OK in 11.5s usage={'prompt_tokens': 32052, 'completion_tokens': 512, 'total_tokens': 32564, 'prompt_tokens_details': {'cached_tokens': 0}}
+noalias5 r0 conv1: OK in 25.8s usage={'prompt_tokens': 100052, 'completion_tokens': 512, 'total_tokens': 100564, 'prompt_tokens_details': {'cached_tokens': 0}}
+noalias5 r0 conv2: OK in 39.3s usage={'prompt_tokens': 160052, 'completion_tokens': 512, 'total_tokens': 160564, 'prompt_tokens_details': {'cached_tokens': 0}}
+noalias5: 3/3 requests completed
+11:54:46 === [noalias5] engine evidence ===
+--- verify timeouts: 0
+strata generate: expert cache 12636 slots, 24.00 GiB of VRAM; policy is
+strata generate: geometry: runs=96 aliased=17330 noalias=7246 bad=0
+strata generate: fill_slot_blocking bounced a refused copy #1: 2176000 B from 0x756b29265400 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #2: 2329600 B from 0x7564b4534800 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #3: 2176000 B from 0x7568acacd400 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #4: 1971200 B from 0x7561fcf53800 (invalid argument)
+strata generate: fill_slot_blocking bounced a refused copy #5: 2329600 B from 0x7566a30c1c00 (invalid argument)
+strata generate: NOTE: 10993 blob read(s) hit an expert with no PCIe alias (tier boundary or injected) - its copies took the CPU path
+strata serve: prompt 32052 tokens = 0 reused + 32052 read in 8268 ms (3876.8 tok/s), 512 generated in 3019 ms (169.6 tok/s), drafts accepted 374 of 382, 2 checkpoints
+strata generate: NOTE: 20664 blob read(s) hit an expert with no PCIe alias (tier boundary or injected) - its copies took the CPU path
+strata serve: prompt 100052 tokens = 0 reused + 100052 read in 22210 ms (4504.8 tok/s), 512 generated in 3227 ms (158.7 tok/s), drafts accepted 266 of 381, 6 checkpoints
+strata generate: NOTE: 34580 blob read(s) hit an expert with no PCIe alias (tier boundary or injected) - its copies took the CPU path
+strata serve: prompt 160052 tokens = 0 reused + 160052 read in 36010 ms (4444.6 tok/s), 512 generated in 2698 ms (189.7 tok/s), drafts accepted 312 of 437, 6 checkpoints
+MemAvailable:   16031980 kB
+11:54:48 engine stopped (VRAM 34 MiB)
+11:54:49 === window closed; restoring strata.service ===
+11:54:49 strata.service restored (dead-man)
+11:54:49 results: /home/ai/Strata/tools/repro/hardening-win-results.txt
