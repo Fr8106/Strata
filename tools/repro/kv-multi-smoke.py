@@ -32,6 +32,9 @@ MAXTOK = int(sys.argv[4]) if len(sys.argv) > 4 else 16
 LABEL  = sys.argv[5] if len(sys.argv) > 5 else "workload"
 TIMEOUT = int(os.environ.get("TIMEOUT", "900"))
 CONC    = int(os.environ.get("CONC", "0")) or len(SIZES)   # CONC=1 sends the conversations strictly in order
+SEED0   = int(os.environ.get("SEED0", "100"))              # vary it to make each run a FRESH conversation
+CORPUS  = os.environ.get("CORPUS", "")                     # a text file: natural-language prompts instead of word salad
+_corpus = open(CORPUS, encoding="utf-8", errors="ignore").read() if CORPUS else ""
 N      = len(SIZES)
 BASE   = f"http://127.0.0.1:{PORT}"
 MODEL  = json.load(open("/home/ai/Strata/strata-iq3_s.json"))["model_name"]
@@ -45,11 +48,15 @@ vocab = ("the of and a in that it was to be is are for with as his they had i he
          "story problem question answer thought feeling moment way world life people").split()
 
 def make_text(seed, words):
+    if _corpus:
+        want = min(len(_corpus) - 1, words * 4)            # ~4 chars per token, like the word salad
+        off = (seed * 7919) % max(1, len(_corpus) - want)
+        return _corpus[off:off + want]
     rng = random.Random(seed)
     return " ".join(rng.choice(vocab) for _ in range(words))
 
 def ask(conv, rnd):
-    text = make_text(100 + conv, SIZES[conv])   # same text every round -> the parked conversation is restored
+    text = make_text(SEED0 + conv, SIZES[conv])   # same text every round -> the parked conversation is restored
     body = json.dumps({"model": MODEL,
                        "messages": [{"role": "user", "content": text}],
                        "max_tokens": MAXTOK}).encode()
