@@ -3209,10 +3209,11 @@ int64_t ArenaExpertSource::validate_geometry(std::string& summary) {
     int64_t bad = 0, aliased = 0, noalias = 0;
     for (const auto& r : runs_)
         if (r.size == 0 || (r.off & 4095) || (r.size & 4095)) ++bad;
-    for (size_t i = 0; i < runs_.size(); ++i)
-        for (size_t j = i + 1; j < runs_.size(); ++j)
-            if (runs_[i].off < runs_[j].off + runs_[j].size &&
-                runs_[j].off < runs_[i].off + runs_[i].size) ++bad;
+    // Runs OVERLAP at the shared page between layer l's non-fixed run (which ceils past the layer
+    // end) and layer l+1's fixed run (which floors before it) - every layer pair does when the layer
+    // size is not a page multiple, and the driver registers that fine (96 runs, 0 refusals).  A blob
+    // never straddles a layer end, so no alias can be ambiguous there.  The invariant that matters -
+    // and that #267 broke - is per-alias, checked below: exactly one run contains it at BOTH ends.
     edge_hash_.assign((size_t) n_layers, 0);
     edge_off_.assign((size_t) n_layers, 0);
     for (int64_t l = 0; l < n_layers; ++l) {
@@ -3229,10 +3230,11 @@ int64_t ArenaExpertSource::validate_geometry(std::string& summary) {
             if (dev == nullptr) { ++noalias; continue; }
             ++aliased;
             const uint64_t bo = lay.blob_offset(l, e);
+            int holders = 0;
             const reg_run* r = nullptr;
             for (const auto& q : runs_)
-                if (q.off <= bo && bo < q.off + q.size) { r = &q; break; }
-            if (r == nullptr || bo + per > r->off + r->size || dev != r->dev + (bo - r->off)) ++bad;
+                if (q.off <= bo && bo + per <= q.off + q.size) { ++holders; r = &q; }
+            if (holders != 1 || dev != r->dev + (bo - r->off)) ++bad;   // #267: head, tail, arithmetic
         }
     }
     summary = "runs=" + std::to_string(runs_.size()) + " aliased=" + std::to_string(aliased) +
