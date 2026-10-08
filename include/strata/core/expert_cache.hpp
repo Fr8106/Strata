@@ -192,7 +192,14 @@ public:
     /// Slots filled so far, for the startup report.
     int64_t fills() const { return fills_; }
 
+    /// Hardening T2: zero-copy HtoDs the driver refused, retried through the pinned staging buffer.
+    /// After the gap-page geometry (`64ff01e`) a boundary-straddling source cannot exist, so a nonzero
+    /// count means a geometry regression, a driver change, or a lifecycle race - it is telemetry, not
+    /// a normal-path cost.
+    int64_t bounces() const { return bounces_; }
+
 private:
+    void note_bounce_(const char* what, const void* src, std::size_t n, int refused);   // refused: cudaError_t
     bool ensure_blocking_staging(std::size_t bytes, std::string& err);
     uint8_t* blocking_staging_ = nullptr;
     std::size_t blocking_staging_bytes_ = 0;
@@ -214,6 +221,7 @@ private:
     int64_t blob_ = 0;
     int64_t next_free_ = 0;
     int64_t fills_ = 0;
+    int64_t bounces_ = 0;
     /// R4.2g.  `per_layer_` off (the default) leaves `next_free_` as the only admission counter, so the
     /// pre-existing path is untouched.
     bool per_layer_ = false;

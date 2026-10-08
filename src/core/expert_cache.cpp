@@ -384,6 +384,17 @@ bool ExpertCache::grow(int64_t want_bytes, std::string& err) {
 #endif
 }
 
+// Hardening T2 (docs/HARDENING-PLAN-2026-10-08.md): a bounced copy must never be silent - #267 grew
+// out of silent refusals.  Rate-limit so a driver-behaviour change (all 24576 profile fills bouncing)
+// cannot flood the log; the count is exported via bounces() for telemetry.
+void ExpertCache::note_bounce_(const char* what, const void* src, std::size_t n, int refused) {
+    ++bounces_;
+    if (bounces_ <= 5 || (bounces_ & 255) == 0)
+        std::fprintf(stderr, "strata generate: %s bounced a refused copy #%lld: %llu B from %p (%s)\n",
+                     what, (long long) bounces_, (unsigned long long) n, src,
+                     cudaGetErrorString((cudaError_t) refused));
+}
+
 bool ExpertCache::ensure_blocking_staging(std::size_t bytes, std::string& err) {
     if (bytes <= blocking_staging_bytes_) return true;
     void* next = nullptr;
@@ -633,17 +644,19 @@ bool ExpertCache::fill_slot_blocking(int32_t slot, const uint8_t* host_blob, std
     const cudaError_t e = cudaMemcpy(dst, blocking_staging_, n, cudaMemcpyHostToDevice);
 #else
     // A zero-copy HtoD from a Mapped-registered source is refused (cudaErrorInvalidValue) when it
-    // straddles two adjacent registrations: in the tier-ordered arena the fixed/non-fixed boundary is
-    // not page-aligned, so the first non-fixed expert's blob starts inside the fixed run (t16: every
-    // in-run copy passes, every cross-run copy fails).  Retry through the pinned staging buffer - a
-    // CPU memcpy has no DMA region constraint.  ~48 experts out of 24576 cross the boundary; the rest
-    // keep the direct zero-copy path.
+    // straddles two adjacent registrations (t16/t17 case B).  Since the gap-page fix (64ff01e) the
+    // registration geometry leaves an unregistered page at every tier boundary, so no arena source
+    // should straddle any more: a bounce here means a geometry regression, a driver change, or the
+    // lifecycle race - never the normal path.  The retry itself stays as defense in depth: a CPU
+    // memcpy into the pinned staging buffer has no DMA region constraint.
     cudaError_t e = cudaMemcpy(dst, host_blob, n, cudaMemcpyHostToDevice);
     if (e == cudaErrorInvalidValue) {
+        note_bounce_("fill_slot_blocking", host_blob, n, e);
         if (!ensure_blocking_staging(n, err))
             return false;
         std::memcpy(blocking_staging_, host_blob, n);
         e = cudaMemcpy(dst, blocking_staging_, n, cudaMemcpyHostToDevice);
+        if (e == cudaSuccess) (void) cudaGetLastError();   // consume the refused attempt's status
     }
 #endif
     if (e != cudaSuccess) {
@@ -667,13 +680,20 @@ bool ExpertCache::fill_slot_queued(int32_t slot, const uint8_t* host_blob, std::
                              : "ExpertCache::fill_slot_queued: the host blob is null";
         return false;
     }
-    // See fill_slot_blocking: a cross-run zero-copy source is refused, bounce through the staging buffer.
+    // See fill_slot_blocking: since 64ff01e a bounce here is an anomaly, kept as defense in depth.
     cudaError_t e = cudaMemcpyAsync(dst, host_blob, n, cudaMemcpyHostToDevice, (cudaStream_t) 0);
     if (e == cudaErrorInvalidValue) {
+        note_bounce_("fill_slot_queued", host_blob, n, e);
+        // The refused attempt queued nothing, but a PREVIOUS bounce may still be reading
+        // blocking_staging_ on stream 0: this thread's CPU memcpy is not ordered against that stream.
+        // Drain before touching the shared buffer - this branch is rare, so the sync costs nothing
+        // on any real path.
+        (void) cudaStreamSynchronize((cudaStream_t) 0);
         if (!ensure_blocking_staging(n, err))
             return false;
         std::memcpy(blocking_staging_, host_blob, n);
         e = cudaMemcpyAsync(dst, blocking_staging_, n, cudaMemcpyHostToDevice, (cudaStream_t) 0);
+        if (e == cudaSuccess) (void) cudaGetLastError();   // consume the refused attempt's status
     }
     if (e != cudaSuccess) {
         err = std::string("ExpertCache::fill_slot_queued: ") + cudaGetErrorString(e);

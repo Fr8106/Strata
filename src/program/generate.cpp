@@ -3697,6 +3697,10 @@ int main(int argc, char** argv) {
         mem_mark("the profile fill");
         std::fprintf(stderr, "strata generate: pre-filled %lld of %lld slots from the profile; slot 0 verified\n",
                      (long long) prefilled, (long long) (per_layer ? xcache.slots() : want));
+        if (xcache.bounces() > 0)   // T2: after 64ff01e a bounce is an anomaly (geometry/driver/lifecycle), never routine
+            std::fprintf(stderr, "strata generate: NOTE: the driver refused %lld fill copies; each was retried through "
+                                 "pinned staging and logged - classify offline against the pcie reglog\n",
+                         (long long) xcache.bounces());
     }
     // P2: the fixed tier.  The fill above admitted in profile-ranking order from slot 0, so the first fixed_n
     // slots hold exactly the hottest fixed_n experts - and the startup release (below) already handed their
