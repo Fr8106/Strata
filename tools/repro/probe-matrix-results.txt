@@ -1,0 +1,7 @@
+t18 probe matrix - run status 2026-10-08: NOT RUN YET.
+Blocked: swift15 holds 31950/32607 MiB VRAM; even a 4 MiB cudaMalloc
+is refused when the context would start that close to the brim. Runs in the T1 window
+(same closed loop as the baseline). Command:
+  ./tools/repro/t18 | tee tools/repro/probe-matrix-results.txt
+Cells (flags x layout x size x shape) - the pre-measured row from t16/t17 is:
+  Portable|Mapped adjacent straddle = REFUSED; gap = ACCEPTED (610.57.04)
