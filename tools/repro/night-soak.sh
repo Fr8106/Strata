@@ -21,7 +21,10 @@ for r in $(seq 1 "$ROUNDS"); do
         sudo systemctl restart strata; restarts=$((restarts+1))
         for i in $(seq 1 100); do curl -sf -m 5 "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 3; done
     fi
-    TIMEOUT=240 CONC=1 .venv/bin/python tools/repro/kv-multi-smoke.py "32000,100000,160000" 1 $PORT 512 "soak-r$r" 2>&1 | grep -E 'OK|FAIL|completed' | tee -a "$RES"
+    # a fresh SEED0 per round: the prompts differ -> no conversation-cache hit -> every round is a
+    # cold 32K/100K/160K prefill sweep, the shape #267's sequence died on (a constant prompt would
+    # make rounds 2..N pure parked-cache restores: 2.8-4.0 s each, the prefill path untested).
+    SEED0=$((1000 + r * 8)) TIMEOUT=240 CONC=1 .venv/bin/python tools/repro/kv-multi-smoke.py "32000,100000,160000" 1 $PORT 512 "soak-r$r" 2>&1 | grep -E 'OK|FAIL|completed' | tee -a "$RES"
     mem=$(awk '/MemAvailable/{print $2}' /proc/meminfo); [ "$mem" -lt "$min_mem" ] && min_mem=$mem
     vt=$(grep -c 'verify: timed out' "$ELOG"); xid=$(sudo dmesg 2>/dev/null | grep -c 'Xid')
     log "round $r: verify-timeouts=$((vt-vt0)) new-xids=$((xid-xid0)) MemAvail-min=$((min_mem/1048576))GiB"
