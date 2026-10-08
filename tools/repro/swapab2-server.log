@@ -1,0 +1,79 @@
+[strata] sampling defaults from the config: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
+loading the vision encoder ...
+loading the model (the first start takes a minute or two) ...
+[strata] starting the engine: reading the model's weights ...
+[strata] loading the experts into RAM (about 55 GB) and locking part of them for the GPU.
+         YOUR PC CAN BE SLOW OR STOP RESPONDING FOR 1-3 MINUTES NOW - this is normal.
+         Please wait and don't close this window; the browser opens when it is ready.
+[strata] still starting (25 s) - please wait ...
+[strata] experts loaded: 46.84 GiB at 1.75 GiB/s (33 s so far)
+[strata] filling the GPU's expert cache (12636 experts, 24.00 GiB of VRAM) ...
+[strata] almost ready ...
+[strata] thinking budget: 16384 tokens (reasoning_budget_tokens; a request can set its own)
+ready: http://127.0.0.1:8090/v1  (OpenAI: /v1/chat/completions, Anthropic: /v1/messages, context 262144 tokens, images on, API key required)
+       open http://127.0.0.1:8090/ in a browser to chat; close this window to stop the model
+       from other devices: http://192.168.6.66:8090/   (API: http://192.168.6.66:8090/v1)
+[strata] reading the prompt: 8,047 of 8,052 tokens, 2 s so far
+[strata] thinking: 100 of max 512 tokens, 132.6 tok/s, 3 s
+[strata] thinking: 282 of max 512 tokens, 160.2 tok/s, 4 s
+[strata] done: 512 tokens in 5 s (189.9 tok/s) (length, cancel=False), expert cache 94.9% hit (+3.0% of the routed experts over PCIe)
+[strata] the reply reached max tokens while still thinking, so it has no answer: a thinking budget (reasoning_budget_tokens, in the request or in strata-<model>.json for every request) leaves room to answer
+[strata] reading the prompt: 8,047 of 8,052 tokens, 2 s so far
+[strata] thinking: 112 of max 512 tokens, 143.6 tok/s, 3 s
+[strata] thinking: 281 of max 512 tokens, 157.8 tok/s, 4 s
+[strata] thinking: 507 of max 512 tokens, 182.2 tok/s, 5 s
+[strata] done: 512 tokens in 5 s (183.1 tok/s) (length, cancel=False), expert cache 97.8% hit (+0.9% of the routed experts over PCIe)
+[strata] the reply reached max tokens while still thinking, so it has no answer: a thinking budget (reasoning_budget_tokens, in the request or in strata-<model>.json for every request) leaves room to answer
+[strata] reading the prompt: 8,047 of 8,052 tokens, 2 s so far
+[strata] thinking: 211 of max 512 tokens, 269.3 tok/s, 3 s
+[strata] thinking: 499 of max 512 tokens, 279.1 tok/s, 4 s
+[strata] done: 512 tokens in 4 s (279.8 tok/s) (length, cancel=False), expert cache 98.6% hit (+0.5% of the routed experts over PCIe)
+[strata] the reply reached max tokens while still thinking, so it has no answer: a thinking budget (reasoning_budget_tokens, in the request or in strata-<model>.json for every request) leaves room to answer
+[strata] reading the prompt: 8,192 of 12,416 tokens, 2 s so far
+[strata] reading the prompt: 12,411 of 12,416 tokens, 3 s so far
+[strata] thinking: 114 of max 512 tokens, 147.7 tok/s, 4 s
+[strata] thinking: 247 of max 512 tokens, 139.0 tok/s, 5 s
+[strata] thinking: 377 of max 512 tokens, 135.8 tok/s, 6 s
+[strata] thinking: 507 of max 512 tokens, 133.8 tok/s, 7 s
+[strata] done: 512 tokens in 7 s (134.4 tok/s) (length, cancel=False), expert cache 96.2% hit (+2.0% of the routed experts over PCIe)
+[strata] the reply reached max tokens while still thinking, so it has no answer: a thinking budget (reasoning_budget_tokens, in the request or in strata-<model>.json for every request) leaves room to answer
+[strata] reading the prompt: 8,192 of 11,457 tokens, 2 s so far
+[strata] reading the prompt: 11,452 of 11,457 tokens, 3 s so far
+[strata] thinking: 112 of max 512 tokens, 144.2 tok/s, 4 s
+[strata] thinking: 253 of max 512 tokens, 141.2 tok/s, 5 s
+[strata] thinking: 379 of max 512 tokens, 135.7 tok/s, 6 s
+[strata] thinking: 510 of max 512 tokens, 133.8 tok/s, 7 s
+[strata] done: 512 tokens in 7 s (134.3 tok/s) (length, cancel=False), expert cache 97.5% hit (+1.2% of the routed experts over PCIe)
+[strata] the reply reached max tokens while still thinking, so it has no answer: a thinking budget (reasoning_budget_tokens, in the request or in strata-<model>.json for every request) leaves room to answer
+[strata] reading the prompt: 8,192 of 10,035 tokens, 2 s so far
+[strata] reading the prompt: 10,030 of 10,035 tokens, 3 s so far
+[strata] thinking: 116 of max 512 tokens, 148.6 tok/s, 4 s
+[strata] thinking: 264 of max 512 tokens, 147.5 tok/s, 5 s
+[strata] thinking: 407 of max 512 tokens, 145.8 tok/s, 6 s
+[strata] done: 512 tokens in 7 s (143.4 tok/s) (length, cancel=False), expert cache 98.1% hit (+0.8% of the routed experts over PCIe)
+[strata] the reply reached max tokens while still thinking, so it has no answer: a thinking budget (reasoning_budget_tokens, in the request or in strata-<model>.json for every request) leaves room to answer
+
+[strata] stopping (Ctrl+C again to end the engine at once) ...
+Traceback (most recent call last):
+  File "/home/ai/Strata/serve/server.py", line 4147, in main
+    time.sleep(1)                               # Windows never delivers Ctrl+C to an untimed Event.wait()
+    ^^^^^^^^^^^^^
+  File "/home/ai/Strata/serve/server.py", line 4140, in on_sigterm
+    raise KeyboardInterrupt
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/ai/Strata/serve/server.py", line 4163, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/ai/Strata/serve/server.py", line 4154, in main
+    close()
+  File "/home/ai/Strata/serve/server.py", line 1271, in close
+    self.proc.stdin.close()
+BrokenPipeError: [Errno 32] Broken pipe

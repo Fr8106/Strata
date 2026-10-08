@@ -1,0 +1,38 @@
+08:53:37 corpus: 447171 bytes
+NInfer-kaushikvira-swift15
+08:53:37 VRAM released (used=34 MiB)
+08:54:09 [fixed0] engine ready: expert cache 12587 slots
+fixed0-rand r0 conv0: OK in 4.4s usage={'prompt_tokens': 8052, 'completion_tokens': 512, 'total_tokens': 8564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0-rand r0 conv1: OK in 4.3s usage={'prompt_tokens': 8052, 'completion_tokens': 512, 'total_tokens': 8564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0-rand r0 conv2: OK in 3.6s usage={'prompt_tokens': 8052, 'completion_tokens': 512, 'total_tokens': 8564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0-rand: 3/3 requests completed
+fixed0-text r0 conv0: OK in 6.8s usage={'prompt_tokens': 10755, 'completion_tokens': 512, 'total_tokens': 11267, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0-text r0 conv1: OK in 6.2s usage={'prompt_tokens': 10639, 'completion_tokens': 512, 'total_tokens': 11151, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0-text r0 conv2: OK in 6.2s usage={'prompt_tokens': 9723, 'completion_tokens': 512, 'total_tokens': 10235, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed0-text: 3/3 requests completed
+08:54:41 === [fixed0] prefill per request (engine log, this run) ===
+prompt 8052 tokens = 0 reused + 8052 read in 1724 ms (4671.8 tok/s), 512 generated in 2641 ms (193.9 tok/s)
+prompt 8052 tokens = 0 reused + 8052 read in 1767 ms (4557.7 tok/s), 512 generated in 2491 ms (205.5 tok/s)
+prompt 8052 tokens = 0 reused + 8052 read in 1705 ms (4723.0 tok/s), 512 generated in 1858 ms (275.5 tok/s)
+prompt 10755 tokens = 0 reused + 10755 read in 2920 ms (3683.0 tok/s), 512 generated in 3811 ms (134.4 tok/s)
+prompt 10639 tokens = 0 reused + 10639 read in 2765 ms (3848.1 tok/s), 512 generated in 3442 ms (148.8 tok/s)
+prompt 9723 tokens = 0 reused + 9723 read in 2714 ms (3581.9 tok/s), 512 generated in 3438 ms (148.9 tok/s)
+08:54:44 engine stopped (VRAM 34 MiB)
+08:55:22 [fixed50] engine ready: expert cache 12636 slots
+fixed50-rand r0 conv0: OK in 4.8s usage={'prompt_tokens': 8052, 'completion_tokens': 512, 'total_tokens': 8564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50-rand r0 conv1: OK in 4.9s usage={'prompt_tokens': 8052, 'completion_tokens': 512, 'total_tokens': 8564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50-rand r0 conv2: OK in 3.9s usage={'prompt_tokens': 8052, 'completion_tokens': 512, 'total_tokens': 8564, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50-rand: 3/3 requests completed
+fixed50-text r0 conv0: OK in 7.2s usage={'prompt_tokens': 12416, 'completion_tokens': 512, 'total_tokens': 12928, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50-text r0 conv1: OK in 6.9s usage={'prompt_tokens': 11457, 'completion_tokens': 512, 'total_tokens': 11969, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50-text r0 conv2: OK in 6.6s usage={'prompt_tokens': 10035, 'completion_tokens': 512, 'total_tokens': 10547, 'prompt_tokens_details': {'cached_tokens': 0}}
+fixed50-text: 3/3 requests completed
+08:55:57 === [fixed50] prefill per request (engine log, this run) ===
+prompt 8052 tokens = 0 reused + 8052 read in 2061 ms (3906.4 tok/s), 512 generated in 2717 ms (188.5 tok/s)
+prompt 8052 tokens = 0 reused + 8052 read in 2098 ms (3837.6 tok/s), 512 generated in 2804 ms (182.6 tok/s)
+prompt 8052 tokens = 0 reused + 8052 read in 2045 ms (3938.3 tok/s), 512 generated in 1839 ms (278.5 tok/s)
+prompt 12416 tokens = 0 reused + 12416 read in 3308 ms (3753.1 tok/s), 512 generated in 3817 ms (134.1 tok/s)
+prompt 11457 tokens = 0 reused + 11457 read in 3056 ms (3748.9 tok/s), 512 generated in 3822 ms (134.0 tok/s)
+prompt 10035 tokens = 0 reused + 10035 read in 2971 ms (3378.2 tok/s), 512 generated in 3579 ms (143.1 tok/s)
+08:56:00 engine stopped (VRAM 34 MiB)
+08:56:00 window closed; swift15 left stopped
