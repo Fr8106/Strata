@@ -7652,6 +7652,12 @@ int main(int argc, char** argv) {
                         (double) (src.file_read_bytes() - file_bytes0) / 1e6, (long long) read_n,
                         (long long) req_offload);
             std::fflush(stdout);
+            // T7-1: the no-alias read count next to the DONE line (the DONE fields themselves are a frozen
+            // positional contract the server parses; new telemetry rides stderr, like T2's bounce NOTE).
+            if (srcp == &arena_src && arena_src.noalias_reads() > 0)
+                std::fprintf(stderr, "strata generate: NOTE: %lld blob read(s) hit an expert with no PCIe "
+                                     "alias (tier boundary or injected) - its copies took the CPU path\n",
+                             (long long) arena_src.noalias_reads());
             if (admit_slot >= 0) {   // --batch: BADM <slot> <1 = continues in the batch windows | 0 = done>
                 bool cont = !cancelled && produced_n == 1 && admit_max_new > 1 && std::strcmp(finish, "length") == 0 &&
                             (int64_t) live.size() == p;

@@ -2921,6 +2921,18 @@ bool ArenaExpertSource::open(const std::string& pack_dir, int64_t n_layers, int6
 }
 
 void ArenaExpertSource::close() {
+    // T7 (R10): with a wedged card, the unregister loop and the munmap become a SECOND fault source - the
+    // teardown meant to clean up after an Xid can raise the next one (a still-pending read touching an
+    // address being unregistered; #224's note at generate.cpp's release is the witness).  Wait for the
+    // device first - with pending work that wait is the correct order anyway - and if it does not answer,
+    // hand the registrations and the mapping to kernel reclaim: process exit unpins pages without any GPU
+    // call.  This leaks only in a run that was already ending.
+    if (base_ != nullptr && cudaDeviceSynchronize() != cudaSuccess) {
+        (void) cudaGetLastError();
+        std::fprintf(stderr, "strata generate: close: the device is not answering; leaving %zu run(s) and the "
+                             "arena to the kernel instead of unregistering (R10)\n", alias_runs_.size());
+        return;
+    }
     // selective mode owns its registrations: the arena never saw them (kDeferRegistration), so it is this
     // class that hands them back - PinnedArena's own unregister loop would otherwise fire at nothing.
     if (base_ != nullptr) {
@@ -3181,6 +3193,21 @@ ArenaExpertSource::reg_stats ArenaExpertSource::register_tier_runs(uint32_t flag
             }
         }
     }
+    // T7-2: the fault-injection knob (T7-1's counter is its sensor).  Withdrawing the alias of an N%
+    // uniform sample makes every `pinned()` consumer take the CPU path for those blobs - verify, prefill,
+    // the prompt loan, the adaptive tier - which is the only way to exercise all of them at once on a
+    // full seq-160k.  Withdrawn AFTER the assignments, one pass, so the geometry line and the edge hashes
+    // describe the post-injection state.  A labelled debug config, never a normal one.
+    if (const char* fp = std::getenv("STRATA_FORCE_NOALIAS_PCT")) {
+        const int pct = std::atoi(fp);
+        int64_t forced = 0;
+        for (size_t g2 = 0; g2 < blob_dev_.size(); ++g2)
+            if (blob_dev_[g2] != nullptr && (int64_t) (g2 % 100) < pct) { blob_dev_[g2] = nullptr; ++forced; }
+        if (pct > 0)
+            std::fprintf(stderr, "strata generate: STRATA_FORCE_NOALIAS_PCT=%d: %lld blob(s) had their alias "
+                                 "withdrawn - fault injection for the CPU-path consumers, not a normal config\n",
+                         pct, (long long) forced);
+    }
     // T3: one startup line that says what the geometry IS, and whether it is wrong - deterministic, not
     // the 4/42 lottery.  WARN-only for now; flips to fail-closed after two soak nights without a false
     // positive (docs/HARDENING-PLAN-2026-10-08.md risk table).
@@ -3405,6 +3432,11 @@ const uint8_t* ArenaExpertSource::blob(int64_t layer, int64_t expert) {
                      (long long) layer, (long long) expert);
         return nullptr;
     }
+    // T7-1 (R6 formalized): a read of a blob with no PCIe alias - the boundary expert of each layer under
+    // 64ff01e's gap geometry, or an N% sample under STRATA_FORCE_NOALIAS_PCT.  Such a read is correct but
+    // its later HtoD is not zero-copy; this count is what says whether the no-alias blobs are ever ACTUALLY
+    // touched (it decides whether T5's build-side padding pays for itself).
+    if (!blob_dev_.empty() && !blob_dev_[(size_t) idx]) ++noalias_reads_;
     ++reads_;
     // Pointer arithmetic into resident memory.  No fault, no copy, no mapping - which is the entire point of
     // this class over `FileExpertSource`.

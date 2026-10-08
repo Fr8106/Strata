@@ -679,6 +679,10 @@ public:
     int64_t blobs() const { return blobs_; }
     const uint8_t* blob(int64_t layer, int64_t expert) override;
     int64_t reads() const { return reads_; }
+    /// T7-1 (R6 formalized): of those reads, how many targeted a blob with NO PCIe alias - the boundary
+    /// expert of a layer under the gap geometry, or a `STRATA_FORCE_NOALIAS_PCT` sample.  Correct but not
+    /// zero-copy; the number says whether T5's build-side padding would pay for itself.
+    int64_t noalias_reads() const { return noalias_reads_; }
     bool pinned(int64_t layer, int64_t expert) const override;
     const uint8_t* device_alias(int64_t layer, int64_t expert) const override;
     /// Selective registration answers "does this layer have any alias" from the per-layer map - the base's
@@ -730,6 +734,7 @@ private:
     uint64_t map_bytes_ = 0;
     std::vector<const uint8_t*> dev_slice_;   ///< device alias of each registered slice (or of the whole range)
     std::vector<const uint8_t*> blob_dev_;    ///< selective mode: per-blob device alias, null = CPU-side
+    int64_t noalias_reads_ = 0;               ///< T7-1: `blob` reads of blobs whose entry above is null
     std::vector<uint8_t> layer_alias_;        ///< selective mode: 1 = the layer has at least one aliased expert
     std::vector<uint64_t> alias_runs_;        ///< selective mode: start of each registered run, for unregister
     /// Selective mode: PER LAYER (index = layer, {0,0} = none), the fixed tier's raw range inside the layer -
